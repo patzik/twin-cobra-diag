@@ -1,0 +1,16 @@
+# macOS / MAME-generated cruft
+.DS_Store
+/cfg/
+
+# Original arcade game ROMs: DO NOT redistribute (copyright)
+/twincobr.zip
+
+# Everything under research/ is third-party (MAME sources, manual scan,
+# jotego GPL schematics/RTL) or extracted game ROMs. Keep only our own notes.
+/research/*
+!/research/FINDINGS.md
+
+# Build intermediates (the burn-ready .bin files ARE committed on purpose)
+diag/build/*.o
+diag/build/*.elf
+diag/build/fault*
