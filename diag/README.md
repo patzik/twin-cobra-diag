@@ -10,8 +10,20 @@ Hardware reference: [../research/FINDINGS.md](../research/FINDINGS.md).
   measured from the game ROM), whole-palette flood, screen on. The screen comes up FIRST
   (unlike the stock ROM) and shows a solid status colour. Verified in MAME (screenshots in
   `doc/`).
+- **Stage 2b** — on-screen text using the game's own char-ROM font (digits `0x00-0x09`,
+  `A-Z` `0x0A-0x23`, blank `0x2D`): white 8x8 text on black. Prints a header and the work-RAM
+  result, with the failing address/expected/got in hex on failure. Verified in MAME
+  (`doc/stage2b_text_pass.png`, `doc/stage2b_text_fail.png`). Note: text leans on the char
+  ROM, text VRAM and palette RAM being good; the heartbeat pin remains the dead-board fallback.
 - **Stage 1** — work / DSP-shared RAM test `$30000-$33FFF`, register-only. Done, verified
-  in MAME on both a good board (GREEN) and a forced fault (RED).
+  in MAME on both a good board (PASS) and a forced fault (FAIL).
+
+### On-screen text report (white on black, monitor is vertical/ROT270)
+```
+TWIN COBRA DIAG
+WORK RAM  PASS          WORK RAM  FAIL
+                        A <addr6> E <exp4> G <got4>
+```
 
 ### On-screen status colours (whole screen)
 - **BLUE**  — video is up, tests running
