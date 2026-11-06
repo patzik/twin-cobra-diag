@@ -42,6 +42,8 @@ BG VRAM     PASS                   (a FAIL adds "A <offset> E <exp> G <got>")
 SHARED RAM  PASS                   stage 5: Z80 shared RAM (or FAIL + detail line)
 SOUND CPU   OK                     (or NOT RUNNING / ROM SUM BAD / NO REPLY CMD xx)
 SOUND ROM   80ECFF66 TC WORLD      CRC32 of sound ROM $4000-$6FFF, read through the Z80
+VBLANK IRQ  PASS                   stage 6: interrupts (or FAIL)
+OFF 0000 ON 0032 OTHER 0000          IRQs counted: enable off / on (50 frames) / other levels
 ALL TESTS PASS                     (or SOME TESTS FAILED)
 ```
 
@@ -57,6 +59,10 @@ the text report replaced that.
   Z80. Verified in MAME (pass, dead Z80, bad shared RAM, no start signal, bad sound ROM).
   An earlier build hung on real boards right after `BG VRAM PASS` (it tested shared RAM
   with the Z80 in reset); fixed, see the stage 5 section.
+
+- **Stage 6** — VBLANK interrupt gating: no interrupt with the enable off, one per frame
+  with it on, no other levels. Verified in MAME (pass, and a forced leaking gate). Added
+  after a real board crashed the game because the interrupt got through while off.
 
 Next stages (DSP self-test, inputs) per [../SPEC.md](../SPEC.md).
 
@@ -249,6 +255,33 @@ is accepted (the tool checks the CRCs, the free space and the vectors first).
 `ACCESS` address points at the device the CPU couldn't read or write; a PC that isn't in
 ROM at all (or `$000100`-`$000108`) means the CPU jumped somewhere wild - often a bad
 program ROM byte or data line.
+
+## Stage 6 — interrupts
+The game keeps the VBLANK interrupt (68000 level 4) **off** during its start-up tests
+(mainlatch `04`) and switches it on only later (`05`). If it gets through anyway, the
+game's VBLANK handler runs before anything is set up and the game crashes (with the crash
+catcher: `ILLEGAL INSTRUCTION`, `PC 000100`, `SR 2400`, the stack showing the interrupted
+start-up test). The diag otherwise runs with all interrupts masked, so it needs a
+dedicated test:
+
+1. enable off, CPU accepting all levels, **300 frames** (~5.5 s, long enough to catch a gate
+   that only leaks now and then): expect `OFF 0000`;
+2. enable on, 50 frames: expect `ON 0032` (50, one per frame; 48-52 passes);
+3. any other level or a spurious interrupt at any time: `OTHER` must be `0000`.
+
+An unexpected interrupt is counted once and the handler then masks further ones, so a
+stuck interrupt line cannot lock the test up. Without a VBLANK input it times the phases
+with a delay and only checks that `ON` is not zero.
+
+**On the bootleg schematic** the gate is: LS259 K17 pin 6 (Q2) AND `/RESET_A` (74LS08 D2,
+pins 13/12 → 11) → reset (pin 13) of the 74LS74 at C1, which is clocked by VSYNC (pin 11);
+its Q (pin 9) → open-collector 74LS03 J14 (pin 12 → 11) → 68000 `/IPL2` (pin 23), pulled up
+by resistor network RN_J5 (pin 8). With the enable off, 68000 pin 23 must stay a steady high.
+A missing pull-up leaves `/IPL2` floating, which gives interrupts at random moments.
+
+![interrupt test](doc/stage6_irq.png)
+
+Left: good board. Right: an interrupt let through while the enable is off.
 
 ## Fault-injection test (how the FAIL path was verified)
 Build a variant whose RAM test points at ROM so writes can't stick:

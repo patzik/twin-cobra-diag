@@ -53,7 +53,9 @@
     .equ L_SHRD,    (ORG - 18)
     .equ L_SND,     (ORG - 19)
     .equ L_SDAT,    (ORG - 20)
-    .equ L_END,     (ORG - 22)
+    .equ L_IRQ,     (ORG - 22)             /* stage 6: interrupts */
+    .equ L_IRQD,    (ORG - 23)
+    .equ L_END,     (ORG - 25)
 
     /* Stage 3 targets (overridable with --defsym for fault-injection tests) */
 .ifndef PROG2
@@ -87,12 +89,20 @@
     .equ P1IN,      0x078004               /* P1 inputs, active high: */
                                            /* bit0 up, 1 down, 2 left, 3 right, 4 B1, 5 B2 */
     .equ MENU_DLY,  0x00002000             /* ~20 ms input poll / debounce delay */
-    .equ L_HINT,    (ORG - 24)
-    .equ L_M0,      (ORG - 26)
-    .equ L_M1,      (ORG - 27)
-    .equ L_M2,      (ORG - 28)
-    .equ L_M3,      (ORG - 30)
-    .equ L_M4,      (ORG - 31)
+    .equ L_HINT,    (ORG - 27)
+    .equ L_M0,      (ORG - 29)
+    .equ L_M1,      (ORG - 30)
+    .equ L_M2,      (ORG - 31)
+    .equ L_M3,      (ORG - 33)
+    .equ L_M4,      (ORG - 34)
+
+    /* stage 6: interrupt counters (work RAM) */
+    .equ IRQON,     0x033fe0               /* nonzero: VBLANK IRQ enabled on purpose */
+    .equ IRQC4,     0x033fe2               /* level-4 (VBLANK) interrupts counted */
+    .equ IRQCO,     0x033fe4               /* any other level, or spurious */
+    .equ IRQ_OFFFR, 300                    /* frames with the IRQ off (~5.5 s: catches
+                                            * a gate that only sometimes leaks) */
+    .equ IRQ_FR,    50                     /* frames with it on */
 
     /* stage 4: text / foreground / background video RAM, reached through an
      * offset register + data port (no auto-increment), as the game tests them */
@@ -435,6 +445,21 @@ zw\@:
 zk\@:
 .endm
 
+/* wait <nfr> frames (VBLANK-timed; ~1 s of delay without a VBLANK input).
+ * Uses D3,D7. */
+.macro IRQFRAMES nfr
+    tst.w   VBDEAD
+    jne     if_dly\@
+    move.w  #\nfr-1,%d3
+if_lp\@:
+    VBWAIT
+    dbra    %d3,if_lp\@
+    jra     if_end\@
+if_dly\@:
+    DELAY   0x00070000
+if_end\@:
+.endm
+
 /* jump to <target> if P1 button 1 is held. Uses A2,D0. */
 .macro CHKB1 target
     lea     P1IN,%a2
@@ -459,6 +484,19 @@ wr\@:
     .org 0x0000
     .long   0x00032000
     .long   _start
+
+/* ---- interrupt vectors (stage 6). Until stage 6 the CPU masks all
+ * interrupts, so these are only reached by the interrupt test or by a
+ * board that raises an interrupt it shouldn't. ---- */
+    .org 0x0060
+    .long   irq_other                   /* 24 spurious */
+    .long   irq_other                   /* 25 level 1 */
+    .long   irq_other                   /* 26 level 2 */
+    .long   irq_other                   /* 27 level 3 */
+    .long   irq_vbl                     /* 28 level 4 = VBLANK */
+    .long   irq_other                   /* 29 level 5 */
+    .long   irq_other                   /* 30 level 6 */
+    .long   irq_other                   /* 31 level 7 */
 
 /* ---- entry ---- */
     .org 0x0400
@@ -784,6 +822,65 @@ snd_bad:
     move.w  #1,(%a1)
 snd_done:
 
+/* ====== STAGE 6: interrupts ======
+ * The VBLANK interrupt (level 4) is gated by mainlatch Q2 (04 = off, 05 = on):
+ * on the bootleg schematic Q2 holds the 74LS74 at C1 in reset, which is
+ * clocked by VSYNC and drives /IPL2 (68000 pin 23) via the open-collector
+ * 74LS03 at J14. The game keeps it OFF during its start-up tests; a board
+ * that lets it through anyway crashes the game inside its VBLANK handler.
+ * Count interrupts over IRQ_OFFFR frames with Q2 off (expect none), then
+ * over IRQ_FR frames with Q2 on (expect one per frame). Any other level is always a failure. */
+    PRINTSTR irqwait, L_IRQ
+    clr.w   IRQON
+    clr.w   IRQC4
+    clr.w   IRQCO
+    move.b  #L_IRQOFF,(%a0)             /* VBLANK IRQ off */
+    move.w  #0x2000,%sr                 /* CPU accepts all levels */
+    IRQFRAMES IRQ_OFFFR
+    move.w  #0x2700,%sr
+    move.w  IRQC4,%d6                   /* D6 = level 4 while off */
+    move.w  #1,IRQON
+    clr.w   IRQC4
+    move.b  #L_HB1,(%a0)                /* 05: VBLANK IRQ on */
+    move.w  #0x2000,%sr
+    IRQFRAMES IRQ_FR
+    move.w  #0x2700,%sr
+    move.b  #L_IRQOFF,(%a0)
+    clr.w   IRQON
+    move.w  IRQC4,%d5                   /* D5 = level 4 while on */
+/* verdict: none while off, none of the other levels, and about one per
+ * frame while on (no VBLANK input: just "some") */
+    moveq   #0,%d4
+    tst.w   %d6
+    jne     irq_bad
+    tst.w   IRQCO
+    jne     irq_bad
+    tst.w   VBDEAD
+    jne     irq_anyon
+    cmp.w   #IRQ_FR-2,%d5
+    jcs     irq_bad
+    cmp.w   #IRQ_FR+2,%d5
+    jhi     irq_bad
+    jra     irq_ok
+irq_anyon:
+    tst.w   %d5
+    jeq     irq_bad
+irq_ok:
+    PRINTSTR irqok, L_IRQ
+    jra     irq_det
+irq_bad:
+    PRINTSTR irqbad, L_IRQ
+    lea     FLAG,%a1
+    move.w  #1,(%a1)
+irq_det:
+    PRINTSTR irqdet, L_IRQD
+    moveq   #0,%d7
+    PRINTHEX %d6, 4, (L_IRQD + 4*CHARSTEP)
+    PRINTHEX %d5, 4, (L_IRQD + 12*CHARSTEP)
+    moveq   #0,%d6
+    move.w  IRQCO,%d6                   /* (PRINTHEX uses D4 itself) */
+    PRINTHEX %d6, 4, (L_IRQD + 24*CHARSTEP)
+
 /* summary line + heartbeat pattern */
     lea     FLAG,%a1
     tst.w   (%a1)
@@ -926,6 +1023,26 @@ lp_keys:
     move.w  %a1,%d5                     /* recover the target index */
     jra     menu_show
 
+/* ---- interrupt handlers (stage 6). They touch no registers. ---- */
+/* VBLANK: count it; re-arm only if it is meant to be on. An interrupt while
+ * it is meant to be off is counted once, then the stacked SR is raised to
+ * mask everything, so a stuck line cannot lock the test up. */
+irq_vbl:
+    addq.w  #1,IRQC4
+    move.b  #L_IRQOFF,LATCH             /* 04: acknowledge (resets C1) */
+    tst.w   IRQON
+    jeq     irq_vbl_off
+    move.b  #L_HB1,LATCH                /* 05: arm for the next frame */
+    rte
+irq_vbl_off:
+    ori.w   #0x0700,(%sp)
+    rte
+/* any other level, or spurious: count once, then mask */
+irq_other:
+    addq.w  #1,IRQCO
+    ori.w   #0x0700,(%sp)
+    rte
+
 /* ============================ data ============================ */
     .even
     CRTCTAB
@@ -960,6 +1077,10 @@ sndok:     .asciz "SOUND CPU   OK"
 snddead:   .asciz "SOUND CPU   NOT RUNNING"
 sndnorep:  .asciz "SOUND CPU   NO REPLY CMD"
 sndsum:    .asciz "SOUND CPU   ROM SUM BAD"
+irqwait:   .asciz "VBLANK IRQ  TESTING"
+irqok:     .asciz "VBLANK IRQ  PASS   "
+irqbad:    .asciz "VBLANK IRQ  FAIL   "
+irqdet:    .asciz "OFF      ON       OTHER"
 shrwait:   .asciz "SHARED RAM  WAIT Z80 BUS"
 s_sdat:    .asciz "SOUND ROM"
 t_tcw:     .asciz "TC WORLD"
