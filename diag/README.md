@@ -33,6 +33,7 @@ WORK RAM  PASS                    (or WORK RAM FAIL + detail line, then it stops
 
 ROM HI 3A646618 TC WORLD           CRC32 of the even (D8-D15) 27256 + matched set
 ROM LO D7D1E317 TC WORLD           CRC32 of the odd  (D0-D7)  27256 + matched set
+NO VBLANK SIGNAL                   (only if $78009 bit 7 never toggles)
 SPRITE RAM  PASS                   (or FAIL + "A <addr> E <exp> G <got>")
 PALETTE RAM PASS                   (or FAIL + detail line)
 ALL TESTS PASS                     (or SOME TESTS FAILED)
@@ -94,10 +95,24 @@ RAM failed. Inputs: P1 at `$78004`, active high (bit 0 up, 1 down, 4 B1, 5 B2).
    `TC WORLD`, `TC USA`, `K TIGER`, `K TIGER ALT`; anything else shows `UNKNOWN` and
    counts as a failure. Testing in circuit also catches socket, decode and data-line
    faults that a programmer read would miss.
-2. **Sprite RAM** `$40000-$40FFF`: same walk / uniqueness / AAAA / 5555 test as work RAM.
-3. **Palette RAM** `$50000-$50DFF`: same test, comparing bits 0-14 only (xBGR_555 bit 15
-   is unused and may not be stored). The test overwrites the palette, which is restored
-   straight afterwards so the text stays readable.
+2. **Sprite RAM** `$40000-$40FFF`: same walk / uniqueness / AAAA / 5555 test as work RAM,
+   but done in short bursts that each start right after VBLANK ends. Afterwards sprite RAM
+   is cleared to zero, which turns every sprite off, so test patterns never show on screen.
+3. **Palette RAM** `$50000-$50DFF`: same test with the **screen turned off**, comparing
+   bits 0-14 only (xBGR_555 bit 15 is unused and may not be stored). The test overwrites
+   the palette, which is restored straight afterwards so the text stays readable.
+
+**Why the timing matters (real hardware only).** The video hardware uses sprite RAM and
+palette RAM too, and the CPU gets clean access only at certain times. The game's own RAM
+test (`$25c0a-$25dd2` in the 27256 pair) shows when: it waits for VBLANK (`$78009` bit 7)
+to end before each sprite RAM burst, and it turns the screen off (latch `0x0E`) before
+testing palette RAM. Earlier diag builds did neither. On real boards they reported false
+SPRITE RAM / PALETTE RAM failures and left black-and-white garbage blocks on screen, while
+MAME (which doesn't model the contention) passed. If VBLANK never arrives, the diag prints
+`NO VBLANK SIGNAL`, counts it as a failure, and runs the sprite test unsynced.
+
+The loop-test menu follows the same rules: sprite RAM bursts are synced to VBLANK, and the
+screen is blanked during each palette RAM burst, so the picture flickers on that target.
 
 Takes about a second to run.
 

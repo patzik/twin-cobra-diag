@@ -92,6 +92,20 @@
     .equ SPR_WORDS, 0x0800
     .equ PAL_TMASK, 0x7fff                 /* xBGR_555: bit 15 unused, not compared */
     .equ FLAG,      0x033ffe               /* work-RAM word: nonzero = a stage-3 test failed */
+    .equ VBDEAD,    0x033ffc               /* work-RAM word: nonzero = no VBLANK signal seen */
+
+    /* VBLANK input: $78009 bit 7, active high on TP-011 (MAME twincobr.cpp).
+     * Real hardware shares sprite RAM with the sprite generator and palette
+     * RAM with the colour output; the CPU only gets clean access at the times
+     * the game uses. From the game's own RAM test (twincobr $25c0a-$25dd2):
+     *   - sprite RAM: wait for VBLANK to END, then do one short burst;
+     *   - palette RAM: tested with the screen turned OFF (latch Q7 = 0).
+     * MAME does not model this contention, so the tests pass there either way. */
+    .equ VBL_IN,    0x078009
+    .equ VB_TMO,    0x00008000             /* ~0.2 s: give up waiting = no VBLANK */
+    .equ L_VBL,     (ORG - 7)
+    .equ SPR_CHUNK, 256                    /* words per VBLANK-synced burst */
+    .equ SPR_NCHUNK,(SPR_WORDS/SPR_CHUNK)
 
     /* loop-test menu (troubleshooting feature) */
     .equ P1IN,      0x078004               /* P1 inputs, active high: */
@@ -323,6 +337,68 @@ tc\@:
 tz\@:
 .endm
 
+/* wait for the END of VBLANK (bit 7 high, then low), like the game does before
+ * touching sprite RAM. Register-only. D7 = 0 afterwards if it timed out. */
+.macro VBWAIT
+    move.l  #VB_TMO,%d7
+vh\@:
+    btst    #7,VBL_IN
+    jne     vl\@
+    subq.l  #1,%d7
+    jne     vh\@
+    jra     vz\@
+vl\@:
+    btst    #7,VBL_IN
+    jeq     vz\@
+    subq.l  #1,%d7
+    jne     vl\@
+vz\@:
+.endm
+
+/* VBWAIT, skipped once VBLANK is known dead (flag in work RAM). Uses D7. */
+.macro VBSYNC
+    tst.w   VBDEAD
+    jne     vs\@
+    VBWAIT
+vs\@:
+.endm
+
+/* write D2 to all of sprite RAM in VBLANK-synced bursts; inc=1 adds 1 per
+ * word (address-uniqueness pattern). Uses A1,D0,D2,D4,D7. */
+.macro SPRWR inc
+    lea     SPR_BASE,%a1
+    moveq   #SPR_NCHUNK-1,%d4
+sw\@:
+    VBSYNC
+    move.w  #SPR_CHUNK-1,%d0
+sx\@:
+    move.w  %d2,(%a1)+
+    .if \inc
+    addq.w  #1,%d2
+    .endif
+    dbra    %d0,sx\@
+    dbra    %d4,sw\@
+.endm
+
+/* verify sprite RAM against D2 (same pattern rules as SPRWR); on mismatch
+ * jump to spr_mis with A1 one word past the bad address, D1 = got. */
+.macro SPRRD inc
+    lea     SPR_BASE,%a1
+    moveq   #SPR_NCHUNK-1,%d4
+sr\@:
+    VBSYNC
+    move.w  #SPR_CHUNK-1,%d0
+sy\@:
+    move.w  (%a1)+,%d1
+    cmp.w   %d2,%d1
+    jne     spr_mis
+    .if \inc
+    addq.w  #1,%d2
+    .endif
+    dbra    %d0,sy\@
+    dbra    %d4,sr\@
+.endm
+
 /* jump to <target> if P1 button 1 is held. Uses A2,D0. */
 .macro CHKB1 target
     lea     P1IN,%a2
@@ -481,31 +557,78 @@ ram_fail:
 stage3:
     lea     FLAG,%a1
     clr.w   (%a1)
+    lea     VBDEAD,%a1
+    clr.w   (%a1)
+
+/* VBLANK present? The sprite test syncs to it; without it, say so and run
+ * unsynced rather than hang. */
+    VBWAIT
+    tst.l   %d7
+    jne     vb_ok
+    lea     VBDEAD,%a1
+    move.w  #1,(%a1)
+    lea     FLAG,%a1
+    move.w  #1,(%a1)
+    PRINTSTR novbl, L_VBL
+vb_ok:
 
 /* 3a. CRC32 of each 27256 program chip at $020000. HI = even bytes (D8-D15),
  *     LO = odd bytes (D0-D7). The game starts executing in these chips. */
     ROMCHK  PROG2,     L_ROMH, romhi
     ROMCHK  (PROG2+1), L_ROML, romlo
 
-/* 3b. sprite RAM $40000-$40FFF */
-    RAMTEST SPR_BASE, SPR_WORDS, 0xffff, spr_fail
+/* 3b. sprite RAM $40000-$40FFF, in short bursts right after VBLANK ends (as the
+ *     game does): data-bus walk, address uniqueness, AAAA, 5555. */
+    VBSYNC
+    lea     SPR_BASE,%a1
+    move.w  #1,%d2
+spr_walk:
+    move.w  %d2,(%a1)
+    move.w  (%a1),%d1
+    cmp.w   %d2,%d1
+    jne     spr_wmis
+    add.w   %d2,%d2
+    bne.s   spr_walk
+    moveq   #0,%d2
+    SPRWR   1
+    moveq   #0,%d2
+    SPRRD   1
+    move.w  #0xaaaa,%d2
+    SPRWR   0
+    SPRRD   0
+    move.w  #0x5555,%d2
+    SPRWR   0
+    SPRRD   0
     PRINTSTR sprok, L_SPR
     jra     spr_done
+spr_wmis:
+    lea     2(%a1),%a1
+spr_mis:
+    lea     -2(%a1),%a5
+    move.w  %d2,%d5
+    move.w  %d1,%d6
 spr_fail:
     PRINTSTR sprbad, L_SPR
     PRINTDET L_SPRD
     lea     FLAG,%a1
     move.w  #1,(%a1)
 spr_done:
+/* leave sprite RAM all zero = every sprite priority 0 = not drawn, so test
+ * patterns never show on screen */
+    moveq   #0,%d2
+    SPRWR   0
 
-/* 3c. palette RAM $50000-$50DFF. This overwrites the palette, so the text
- *     colours are restored straight after. */
+/* 3c. palette RAM $50000-$50DFF, with the screen OFF (as the game does). This
+ *     overwrites the palette, so the text colours are restored straight after. */
+    move.b  #L_SCRNOFF,(%a0)
     RAMTEST PALT_BASE, PAL_WORDS, PAL_TMASK, pal_fail
     TEXTPAL
+    move.b  #L_SCRNON,(%a0)
     PRINTSTR palok, L_PAL
     jra     pal_done
 pal_fail:
     TEXTPAL
+    move.b  #L_SCRNON,(%a0)
     PRINTSTR palbad, L_PAL
     PRINTDET L_PALD
     lea     FLAG,%a1
@@ -599,7 +722,17 @@ loop_go:
     PRINTSTR m_run,  L_M3
     PRINTSTR m_run2, (L_M3 + 13*CHARSTEP)
 lp_outer:
-    move.w  #0x0fff,%d4                 /* ~4096 cycles between screen updates */
+/* access rules as in the tests: sprite RAM right after VBLANK, palette RAM
+ * with the screen off (it comes back on for the read-back display) */
+    cmpa.l  #PAL_BASE,%a5
+    jne     lp_notpal
+    move.b  #L_SCRNOFF,(%a0)
+lp_notpal:
+    cmpa.l  #SPR_BASE,%a5
+    jne     lp_go
+    VBWAIT
+lp_go:
+    move.w  #0x01ff,%d4                 /* 512 cycles per burst (~6 ms) */
 lp:
     move.b  #L_HB1,(%a0)                /* scope trigger: start of cycle */
     move.w  #0x0000,(%a5)
@@ -608,6 +741,7 @@ lp:
     move.w  (%a5),%d5
     move.b  #L_HB0,(%a0)
     dbra    %d4,lp
+    move.b  #L_SCRNON,(%a0)
     PRINTHEX %d6, 4, (L_M3 + 8*CHARSTEP)    /* read-back after writing 0000 */
     PRINTHEX %d5, 4, (L_M3 + 21*CHARSTEP)   /* read-back after writing FFFF */
     lea     P1IN,%a2
@@ -652,6 +786,7 @@ palbad:    .asciz "PALETTE RAM FAIL"
 allok:     .asciz "ALL TESTS PASS"
 somebad:   .asciz "SOME TESTS FAILED"
 s_unknown: .asciz "UNKNOWN"
+novbl:     .asciz "NO VBLANK SIGNAL"
 t_tcw:     .asciz "TC WORLD"
 t_tcu:     .asciz "TC USA"
 t_kt:      .asciz "K TIGER"
