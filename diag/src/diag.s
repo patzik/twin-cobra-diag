@@ -93,6 +93,16 @@
     .equ PAL_TMASK, 0x7fff                 /* xBGR_555: bit 15 unused, not compared */
     .equ FLAG,      0x033ffe               /* work-RAM word: nonzero = a stage-3 test failed */
 
+    /* loop-test menu (troubleshooting feature) */
+    .equ P1IN,      0x078004               /* P1 inputs, active high: */
+                                           /* bit0 up, 1 down, 2 left, 3 right, 4 B1, 5 B2 */
+    .equ MENU_DLY,  0x00002000             /* ~20 ms input poll / debounce delay */
+    .equ L_HINT,    (ORG - 16)
+    .equ L_M0,      (ORG - 18)
+    .equ L_M1,      (ORG - 19)
+    .equ L_M2,      (ORG - 20)
+    .equ L_M3,      (ORG - 22)
+
 /* register-only busy delay (uses D7) */
 .macro DELAY n
     move.l  #\n,%d7
@@ -313,6 +323,24 @@ tc\@:
 tz\@:
 .endm
 
+/* jump to <target> if P1 button 1 is held. Uses A2,D0. */
+.macro CHKB1 target
+    lea     P1IN,%a2
+    move.w  (%a2),%d0
+    btst    #4,%d0
+    jne     \target
+.endm
+
+/* wait until P1 up/down/B1/B2 are all released. Uses A2,D0,D7. */
+.macro WAITREL
+wr\@:
+    DELAY   MENU_DLY
+    lea     P1IN,%a2
+    move.w  (%a2),%d0
+    and.w   #0x0033,%d0
+    jne     wr\@
+.endm
+
     .text
 
 /* ---- 68000 reset vector ---- */
@@ -494,15 +522,22 @@ some_fail:
     PRINTSTR somebad, L_END
     jra     fail_hold
 
-/* ===================== liveness on the heartbeat pin ===================== */
+/* ===================== liveness on the heartbeat pin =====================
+ * Both end states also watch P1 button 1, which opens the loop-test menu. */
 pass_hold:
+    PRINTSTR m_hint, L_HINT
+pass_loop:
     move.b  #L_HB1,(%a0)
     DELAY   HB_SLOW
+    CHKB1   menu
     move.b  #L_HB0,(%a0)
     DELAY   HB_SLOW
-    jra     pass_hold
+    CHKB1   menu
+    jra     pass_loop
 
 fail_hold:
+    PRINTSTR m_hint, L_HINT
+fail_loop:
     moveq   #3,%d4
 fp:
     move.b  #L_HB1,(%a0)
@@ -511,7 +546,79 @@ fp:
     DELAY   HB_FAST
     dbra    %d4,fp
     DELAY   HB_SLOW
-    jra     fail_hold
+    CHKB1   menu
+    jra     fail_loop
+
+/* ===================== loop-test menu (troubleshooting) =====================
+ * Pick a RAM with the P1 stick, B1 starts a tight loop on its first word:
+ * write 0000, read, write FFFF, read - so every data line toggles each cycle.
+ * The heartbeat pin (LS259 pin 6) goes high at the start of each cycle as a
+ * scope trigger. The two read-backs are shown live. B2 stops.
+ * Register-only (no stack, no work RAM), so it also works when work RAM is
+ * the thing that failed. D5 = target index (0 work, 1 sprite, 2 palette). */
+menu:
+    moveq   #0,%d5
+menu_show:
+    PRINTSTR m_title, L_M0
+    PRINTSTR m_keys,  L_M2
+m_target:
+    PRINTSTR m_tgt, L_M1
+    lea     loop_tab,%a1
+    move.w  %d5,%d0
+    lsl.w   #3,%d0
+    movea.l 0(%a1,%d0.w),%a5            /* base address of the target */
+    movea.l 4(%a1,%d0.w),%a1            /* its name */
+    PRINTSTRR %a1, (L_M1 + 7*CHARSTEP)
+    PRINTHEX %a5, 6, (L_M1 + 19*CHARSTEP)
+    WAITREL
+m_poll:
+    DELAY   MENU_DLY
+    lea     P1IN,%a2
+    move.w  (%a2),%d0
+    btst    #0,%d0                      /* up */
+    jne     m_up
+    btst    #1,%d0                      /* down */
+    jne     m_down
+    btst    #4,%d0                      /* B1: start */
+    jne     loop_go
+    jra     m_poll
+m_up:
+    subq.w  #1,%d5
+    jpl     m_target
+    moveq   #2,%d5
+    jra     m_target
+m_down:
+    addq.w  #1,%d5
+    cmp.w   #3,%d5
+    jlt     m_target
+    moveq   #0,%d5
+    jra     m_target
+
+loop_go:
+    WAITREL
+    PRINTSTR m_run,  L_M3
+    PRINTSTR m_run2, (L_M3 + 13*CHARSTEP)
+lp_outer:
+    move.w  #0x0fff,%d4                 /* ~4096 cycles between screen updates */
+lp:
+    move.b  #L_HB1,(%a0)                /* scope trigger: start of cycle */
+    move.w  #0x0000,(%a5)
+    move.w  (%a5),%d6
+    move.w  #0xffff,(%a5)
+    move.w  (%a5),%d5
+    move.b  #L_HB0,(%a0)
+    dbra    %d4,lp
+    PRINTHEX %d6, 4, (L_M3 + 8*CHARSTEP)    /* read-back after writing 0000 */
+    PRINTHEX %d5, 4, (L_M3 + 21*CHARSTEP)   /* read-back after writing FFFF */
+    lea     P1IN,%a2
+    move.w  (%a2),%d0
+    btst    #5,%d0                      /* B2: stop */
+    jeq     lp_outer
+    WAITREL
+    move.l  %a5,%d5                     /* recover the target index: */
+    swap    %d5                         /* $03/$04/$05 -> 0/1/2 */
+    subq.w  #3,%d5
+    jra     menu_show
 
 /* ============================ data ============================ */
     .even
@@ -631,3 +738,19 @@ crc32tab:
     .long 0xbad03605, 0xcdd70693, 0x54de5729, 0x23d967bf
     .long 0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94
     .long 0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d
+
+/* ---- loop-test menu strings and target table ---- */
+m_hint:  .asciz "P1 BUTTON 1  LOOP TEST MENU"
+m_title: .asciz "LOOP TEST  STICK SELECTS"
+m_tgt:   .asciz "TARGET"
+m_keys:  .asciz "B1 START  B2 STOP"
+m_run:   .asciz "W0000 R"
+m_run2:  .asciz "WFFFF R"
+n_work:  .asciz "WORK RAM   "
+n_spr:   .asciz "SPRITE RAM "
+n_pal:   .asciz "PALETTE RAM"
+    .even
+loop_tab:
+    .long 0x030000, n_work
+    .long 0x040000, n_spr
+    .long 0x050000, n_pal

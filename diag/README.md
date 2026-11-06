@@ -22,6 +22,9 @@ Hardware reference: [../research/FINDINGS.md](../research/FINDINGS.md).
   known MAME sets), sprite RAM `$40000` and palette RAM `$50000`. Every test runs and
   reports even if an earlier one failed. Verified in MAME (`doc/stage3_pass.png`,
   `doc/stage3_fault.png`).
+- **Loop-test menu** — P1 button 1 after the tests: pick work / sprite / palette RAM and
+  loop write/read on it for scoping, with a scope trigger on the heartbeat pin and live
+  read-backs. Verified in MAME (`doc/loop_menu.png`), also after a work-RAM failure.
 
 ### On-screen text report (white on black, monitor is vertical/ROT270)
 ```
@@ -59,6 +62,29 @@ even with dead RAM:
 2. address/data uniqueness — every word written its own index, then verified (stuck/shorted
    address lines, aliasing, dead cells),
 3. march patterns AAAA then 5555 (each cell must hold both polarities).
+
+## Loop-test menu (for scoping a failing RAM)
+When the tests finish (pass or fail, including a work-RAM failure) the screen shows
+`P1 BUTTON 1  LOOP TEST MENU`. Hold P1 button 1 to open it:
+
+```
+LOOP TEST  STICK SELECTS
+TARGET SPRITE RAM  040000          P1 up/down: WORK RAM / SPRITE RAM / PALETTE RAM
+B1 START  B2 STOP
+
+W0000 R 0000  WFFFF R FFFF         live read-backs while looping
+```
+
+B1 starts a tight loop on the first word of the chosen RAM: write `0000`, read, write
+`FFFF`, read, repeat. Every data line toggles on every cycle, so you can follow one line
+with a scope from the 68000 through any 74LS245 buffers to the RAM pins and see where
+it stops toggling or gets stuck. The heartbeat pin (mainlatch LS259 **pin 6**) goes high
+at the start of each cycle, which makes a clean **scope trigger**. The two values read
+back are shown live, so a stuck or floating bit is visible on screen as well (a good
+board shows `0000` and `FFFF`). B2 stops the loop and returns to the menu.
+
+The menu and loop use no stack or work RAM, so they still work on a board whose work
+RAM failed. Inputs: P1 at `$78004`, active high (bit 0 up, 1 down, 4 B1, 5 B2).
 
 ## Stage 3 — what it tests
 1. **Program ROM CRC32, per chip.** The two 27256s at `$020000-$02FFFF` hold the game's
