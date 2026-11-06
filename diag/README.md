@@ -270,7 +270,20 @@ dedicated test:
 3. any other level or a spurious interrupt at any time: `OTHER` must be `0000`.
 
 An unexpected interrupt is counted once and the handler then masks further ones, so a
-stuck interrupt line cannot lock the test up. Without a VBLANK input it times the phases
+stuck interrupt line cannot lock the test up.
+
+**If the screen stops on `VBLANK IRQ  TESTING` / `STOPS HERE IRQ ACK HANG`:** the CPU took an
+interrupt and the acknowledge never finished - nothing answered with `/VPA`, so it waits
+forever (no software can catch that). On the bootleg schematic the acknowledge path is the
+74LS138 at FU12 (inputs FC0/FC1/FC2 = 68000 pins 28/27/26, enabled by `/LDS`; output 7 =
+pin 7) → 74LS08 J17 (pin 1 → pin 3) → 68000 `/VPA` (**pin 21**). While it hangs, expect
+68000 `/AS` (pin 6) low, FC2-FC0 all high, and pin 21 high instead of low. The netlist shows
+FU12's active-high enable (pin 6) unconnected; check what it really goes to on the board.
+Since an acknowledge only happens when an interrupt was raised, a hang in the first
+(enable-off) phase also means the interrupt leaked through - see the gate below.
+
+**Any other exception** (bus error, address error, illegal instruction, ...) anywhere in the
+diag now shows `EXCEPTION nn PC xxxxxx` on the detail line instead of a dead screen. Without a VBLANK input it times the phases
 with a delay and only checks that `ON` is not zero.
 
 **On the bootleg schematic** the gate is: LS259 K17 pin 6 (Q2) AND `/RESET_A` (74LS08 D2,

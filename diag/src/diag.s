@@ -103,6 +103,7 @@
     .equ IRQ_OFFFR, 300                    /* frames with the IRQ off (~5.5 s: catches
                                             * a gate that only sometimes leaks) */
     .equ IRQ_FR,    50                     /* frames with it on */
+    .equ EXCNO,     0x033fe6               /* unexpected exception number */
 
     /* stage 4: text / foreground / background video RAM, reached through an
      * offset register + data port (no auto-increment), as the game tests them */
@@ -485,6 +486,32 @@ wr\@:
     .long   0x00032000
     .long   _start
 
+/* ---- all other exception vectors: show which one and where, instead of
+ * running off into the weeds with a black screen ---- */
+    .org 0x0008
+    .long   exc_2
+    .long   exc_3
+    .long   exc_4
+    .long   exc_5
+    .long   exc_6
+    .long   exc_7
+    .long   exc_8
+    .long   exc_9
+    .long   exc_10
+    .long   exc_11
+    .long   exc_12
+    .long   exc_13
+    .long   exc_14
+    .long   exc_15
+    .long   exc_16
+    .long   exc_17
+    .long   exc_18
+    .long   exc_19
+    .long   exc_20
+    .long   exc_21
+    .long   exc_22
+    .long   exc_23
+
 /* ---- interrupt vectors (stage 6). Until stage 6 the CPU masks all
  * interrupts, so these are only reached by the interrupt test or by a
  * board that raises an interrupt it shouldn't. ---- */
@@ -497,6 +524,38 @@ wr\@:
     .long   irq_other                   /* 29 level 5 */
     .long   irq_other                   /* 30 level 6 */
     .long   irq_other                   /* 31 level 7 */
+    .long   exc_32
+    .long   exc_33
+    .long   exc_34
+    .long   exc_35
+    .long   exc_36
+    .long   exc_37
+    .long   exc_38
+    .long   exc_39
+    .long   exc_40
+    .long   exc_41
+    .long   exc_42
+    .long   exc_43
+    .long   exc_44
+    .long   exc_45
+    .long   exc_46
+    .long   exc_47
+    .long   exc_48
+    .long   exc_49
+    .long   exc_50
+    .long   exc_51
+    .long   exc_52
+    .long   exc_53
+    .long   exc_54
+    .long   exc_55
+    .long   exc_56
+    .long   exc_57
+    .long   exc_58
+    .long   exc_59
+    .long   exc_60
+    .long   exc_61
+    .long   exc_62
+    .long   exc_63
 
 /* ---- entry ---- */
     .org 0x0400
@@ -831,6 +890,7 @@ snd_done:
  * Count interrupts over IRQ_OFFFR frames with Q2 off (expect none), then
  * over IRQ_FR frames with Q2 on (expect one per frame). Any other level is always a failure. */
     PRINTSTR irqwait, L_IRQ
+    PRINTSTR irqhang, L_IRQD            /* stays on screen if the CPU hangs */
     clr.w   IRQON
     clr.w   IRQC4
     clr.w   IRQCO
@@ -1023,6 +1083,193 @@ lp_keys:
     move.w  %a1,%d5                     /* recover the target index */
     jra     menu_show
 
+/* ---- unexpected exceptions: print "EXCEPTION nn PC xxxxxx" and stop ---- */
+exc_2:
+    move.w  #2,EXCNO
+    bra.w   exc_common
+exc_3:
+    move.w  #3,EXCNO
+    bra.w   exc_common
+exc_4:
+    move.w  #4,EXCNO
+    bra.w   exc_common
+exc_5:
+    move.w  #5,EXCNO
+    bra.w   exc_common
+exc_6:
+    move.w  #6,EXCNO
+    bra.w   exc_common
+exc_7:
+    move.w  #7,EXCNO
+    bra.w   exc_common
+exc_8:
+    move.w  #8,EXCNO
+    bra.w   exc_common
+exc_9:
+    move.w  #9,EXCNO
+    bra.w   exc_common
+exc_10:
+    move.w  #10,EXCNO
+    bra.w   exc_common
+exc_11:
+    move.w  #11,EXCNO
+    bra.w   exc_common
+exc_12:
+    move.w  #12,EXCNO
+    bra.w   exc_common
+exc_13:
+    move.w  #13,EXCNO
+    bra.w   exc_common
+exc_14:
+    move.w  #14,EXCNO
+    bra.w   exc_common
+exc_15:
+    move.w  #15,EXCNO
+    bra.w   exc_common
+exc_16:
+    move.w  #16,EXCNO
+    bra.w   exc_common
+exc_17:
+    move.w  #17,EXCNO
+    bra.w   exc_common
+exc_18:
+    move.w  #18,EXCNO
+    bra.w   exc_common
+exc_19:
+    move.w  #19,EXCNO
+    bra.w   exc_common
+exc_20:
+    move.w  #20,EXCNO
+    bra.w   exc_common
+exc_21:
+    move.w  #21,EXCNO
+    bra.w   exc_common
+exc_22:
+    move.w  #22,EXCNO
+    bra.w   exc_common
+exc_23:
+    move.w  #23,EXCNO
+    bra.w   exc_common
+exc_32:
+    move.w  #32,EXCNO
+    bra.w   exc_common
+exc_33:
+    move.w  #33,EXCNO
+    bra.w   exc_common
+exc_34:
+    move.w  #34,EXCNO
+    bra.w   exc_common
+exc_35:
+    move.w  #35,EXCNO
+    bra.w   exc_common
+exc_36:
+    move.w  #36,EXCNO
+    bra.w   exc_common
+exc_37:
+    move.w  #37,EXCNO
+    bra.w   exc_common
+exc_38:
+    move.w  #38,EXCNO
+    bra.w   exc_common
+exc_39:
+    move.w  #39,EXCNO
+    bra.w   exc_common
+exc_40:
+    move.w  #40,EXCNO
+    bra.w   exc_common
+exc_41:
+    move.w  #41,EXCNO
+    bra.w   exc_common
+exc_42:
+    move.w  #42,EXCNO
+    bra.w   exc_common
+exc_43:
+    move.w  #43,EXCNO
+    bra.w   exc_common
+exc_44:
+    move.w  #44,EXCNO
+    bra.w   exc_common
+exc_45:
+    move.w  #45,EXCNO
+    bra.w   exc_common
+exc_46:
+    move.w  #46,EXCNO
+    bra.w   exc_common
+exc_47:
+    move.w  #47,EXCNO
+    bra.w   exc_common
+exc_48:
+    move.w  #48,EXCNO
+    bra.w   exc_common
+exc_49:
+    move.w  #49,EXCNO
+    bra.w   exc_common
+exc_50:
+    move.w  #50,EXCNO
+    bra.w   exc_common
+exc_51:
+    move.w  #51,EXCNO
+    bra.w   exc_common
+exc_52:
+    move.w  #52,EXCNO
+    bra.w   exc_common
+exc_53:
+    move.w  #53,EXCNO
+    bra.w   exc_common
+exc_54:
+    move.w  #54,EXCNO
+    bra.w   exc_common
+exc_55:
+    move.w  #55,EXCNO
+    bra.w   exc_common
+exc_56:
+    move.w  #56,EXCNO
+    bra.w   exc_common
+exc_57:
+    move.w  #57,EXCNO
+    bra.w   exc_common
+exc_58:
+    move.w  #58,EXCNO
+    bra.w   exc_common
+exc_59:
+    move.w  #59,EXCNO
+    bra.w   exc_common
+exc_60:
+    move.w  #60,EXCNO
+    bra.w   exc_common
+exc_61:
+    move.w  #61,EXCNO
+    bra.w   exc_common
+exc_62:
+    move.w  #62,EXCNO
+    bra.w   exc_common
+exc_63:
+    move.w  #63,EXCNO
+    bra.w   exc_common
+exc_common:
+    move.w  #0x2700,%sr
+    move.l  %sp,%d0
+    movea.l %d0,%a1
+    move.w  EXCNO,%d5
+    cmp.w   #3,%d5                      /* bus / address error: PC at +10 */
+    jhi     exc_short
+    move.l  10(%a1),%d6
+    jra     exc_pc
+exc_short:
+    move.l  2(%a1),%d6
+exc_pc:
+    movea.l #0x033e00,%sp
+    lea     LATCH,%a0
+    lea     TXOFFS,%a3
+    lea     TXDATA,%a4
+    move.b  #L_SCRNON,(%a0)
+    PRINTSTR excmsg, L_IRQD
+    PRINTHEX %d5, 2, (L_IRQD + 10*CHARSTEP)
+    PRINTHEX %d6, 6, (L_IRQD + 19*CHARSTEP)
+    lea     FLAG,%a1
+    move.w  #1,(%a1)
+    jra     fail_hold
+
 /* ---- interrupt handlers (stage 6). They touch no registers. ---- */
 /* VBLANK: count it; re-arm only if it is meant to be on. An interrupt while
  * it is meant to be off is counted once, then the stacked SR is raised to
@@ -1080,7 +1327,9 @@ sndsum:    .asciz "SOUND CPU   ROM SUM BAD"
 irqwait:   .asciz "VBLANK IRQ  TESTING"
 irqok:     .asciz "VBLANK IRQ  PASS   "
 irqbad:    .asciz "VBLANK IRQ  FAIL   "
-irqdet:    .asciz "OFF      ON       OTHER"
+irqdet:    .asciz "OFF      ON       OTHER     "
+irqhang:   .asciz "STOPS HERE IRQ ACK HANG     "
+excmsg:    .asciz "EXCEPTION       PC          "
 shrwait:   .asciz "SHARED RAM  WAIT Z80 BUS"
 s_sdat:    .asciz "SOUND ROM"
 t_tcw:     .asciz "TC WORLD"
