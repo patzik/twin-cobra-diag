@@ -182,7 +182,8 @@ right after `BG VRAM PASS`. MAME doesn't model the bus request, so it passed the
 
 The loop-test menu has a fourth target, **SHARED RAM** (`$7A000`). Entering the menu restarts
 the Z80 and leaves it waiting for `AA`, so it only reads `$8001` and keeps granting its bus.
-Only D0-D7 are real there; D8-D15 read back whatever floats.
+Only D0-D7 exist there, so for this target the read-backs show just that byte
+(`W00 R 00  WFF R FF` on a good board) with the note `8 BIT RAM  D0 TO D7 ONLY`.
 
 ![pass](doc/stage5_pass.png)
 

@@ -124,6 +124,7 @@
     .equ L_M1,      (ORG - 27)
     .equ L_M2,      (ORG - 28)
     .equ L_M3,      (ORG - 30)
+    .equ L_M4,      (ORG - 31)
 
     /* stage 4: text / foreground / background video RAM, reached through an
      * offset register + data port (no auto-increment), as the game tests them */
@@ -1000,8 +1001,17 @@ m_down:
 loop_go:
     movea.w %d5,%a1                     /* keep the target index (A1 is free here) */
     WAITREL
+    cmpa.l  #SHR_BASE,%a5
+    jeq     lp_lbl8
     PRINTSTR m_run,  L_M3
     PRINTSTR m_run2, (L_M3 + 13*CHARSTEP)
+    PRINTSTR m_note0, L_M4
+    jra     lp_outer
+lp_lbl8:
+/* shared RAM is 8-bit (D0-D7): show only the byte that exists */
+    PRINTSTR m_run8,  L_M3
+    PRINTSTR m_run8b, (L_M3 + 13*CHARSTEP)
+    PRINTSTR m_note8, L_M4
 lp_outer:
 /* access rules as in the tests: sprite RAM right after VBLANK, palette RAM
  * with the screen off (it comes back on for the read-back display) */
@@ -1023,8 +1033,15 @@ lp:
     move.b  #L_HB0,(%a0)
     dbra    %d4,lp
     move.b  #L_SCRNON,(%a0)
+    cmpa.l  #SHR_BASE,%a5
+    jeq     lp_show8
     PRINTHEX %d6, 4, (L_M3 + 8*CHARSTEP)    /* read-back after writing 0000 */
     PRINTHEX %d5, 4, (L_M3 + 21*CHARSTEP)   /* read-back after writing FFFF */
+    jra     lp_keys
+lp_show8:
+    PRINTHEX %d6, 2, (L_M3 + 6*CHARSTEP)
+    PRINTHEX %d5, 2, (L_M3 + 19*CHARSTEP)
+lp_keys:
     lea     P1IN,%a2
     move.w  (%a2),%d0
     btst    #5,%d0                      /* B2: stop */
@@ -1171,8 +1188,12 @@ m_hint:  .asciz "P1 BUTTON 1  LOOP TEST MENU"
 m_title: .asciz "LOOP TEST  STICK SELECTS"
 m_tgt:   .asciz "TARGET"
 m_keys:  .asciz "B1 START  B2 STOP"
-m_run:   .asciz "W0000 R"
-m_run2:  .asciz "WFFFF R"
+m_run:   .asciz "W0000 R "
+m_run2:  .asciz "WFFFF R "
+m_run8:  .asciz "W00 R       "
+m_run8b: .asciz "WFF R       "
+m_note8: .asciz "8 BIT RAM  D0 TO D7 ONLY"
+m_note0: .asciz "                        "
 n_work:  .asciz "WORK RAM   "
 n_spr:   .asciz "SPRITE RAM "
 n_pal:   .asciz "PALETTE RAM"
