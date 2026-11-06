@@ -66,7 +66,8 @@ the text report replaced that.
   after a real board crashed the game because the interrupt got through while off.
 
 - **Main menu** — input/DIP test, colour test, text/FG/BG tile viewers, sprite viewer,
-  scroll test for all three layers, sound test, RAM loop test, rerun. Verified in MAME (`doc/menu_pages.png`, `doc/menu_viewers.png`).
+  sprite test (flip, priority, full screen), scroll test for all three layers, sound test,
+  DSP test, RAM loop test, rerun. Verified in MAME (`doc/menu_pages.png`, `doc/menu_viewers.png`).
 
 - **Stage 7** — DSP (TMS320C10): the game's own self-test. Verified in MAME (pass, a bad
   DSP ROM bit, a dead DSP). Also on the menu as DSP TEST.
@@ -278,6 +279,7 @@ needs the stack.
 | COLOUR TEST | 31 steps each of red, green, blue and white |
 | TEXT / FG / BG TILE VIEWER | 256 tiles of that layer per page, straight from its ROMs |
 | SPRITE VIEWER | 64 sprites per page |
+| SPRITE TEST | Flip bits, the 3 sprite priorities, and a full screen of 512 moving sprites |
 | SCROLL TEST | Scrolls the text, FG or BG layer over a test pattern |
 | SOUND TEST | Sends a sound code to the Z80 and shows whether it answered |
 | DSP TEST | Runs the DSP self-test again (stage 7); B1 repeats it |
@@ -313,6 +315,26 @@ To recapture the palette from your own ROM set (needs MAME):
 (8 pages), FG = 8192 tiles (32 pages, the upper 16 through the FG ROM bank bit), BG = 4096
 (16 pages), sprites = 2048 (32 pages). Sprites are placed from MAME's sprite offsets; on a
 real board they may sit a few pixels off.
+
+**Sprite test.** B1 steps through three parts, B2 exits:
+
+- **FLIP** - the player's helicopter (5 sprites: `$023 $024` top row, `$025 $026` bottom
+  row, `$027` tail; the game's colour set `$2F`) four times: **normal**, **flip Y**
+  (mirrored left/right: the halves swap places), **flip X** (facing down: the rows swap) and
+  **both**. **All four must look like a whole helicopter**: a part that comes out wrong
+  points at that flip bit's path (attribute bit 8 = X, mirrors up/down on the rotated
+  monitor; bit 9 = Y, left/right). X-flipped sprites are placed 15 pixels differently by the
+  hardware (as MAME models it); the test corrects for that.
+- **PRIORITY** - three columns of solid sprites across a blue band of FG tiles and a grey
+  band of text: **P1** (red) must go under both bands, **P2** (green) over FG but under
+  text, **P3** (white) over everything. A column on the wrong side of a band points at the
+  priority logic (the priority PROMs and the layer mixing).
+- **FULL SCREEN** - all 512 sprites as a coloured grid over the whole screen, moving slowly
+  (the list is rewritten every 8 frames). It loads the sprite hardware as much as it can
+  be; the grid must stay clean. Streaks, missing rows or garbage lines point at the sprite
+  line buffers (MBM2148s on board B of the bootleg) or the sprite RAM read path.
+
+![sprite test](doc/sprite_test.png)
 
 **Scroll test.** Modelled on the Shinobi test ROM's scroll test. It checks one scroll
 register at a time, so a bad bit can be pinned down.

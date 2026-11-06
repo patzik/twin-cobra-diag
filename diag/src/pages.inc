@@ -80,7 +80,7 @@ mm_ok:
     bsr     page_init
     bsr     wait_release                /* a button still held is not a new press */
     SAY     s_mtitle, 0, 0, A_YELLOW
-    SAY     s_mhelp, 26, 0, A_GREY
+    SAY     s_mhelp, 28, 0, A_GREY
 mm_draw:
     bsr     mm_items
 mm_loop:
@@ -116,7 +116,7 @@ mm_3:
     jsr     (%a1)
     jra     main_menu
 
-    .equ MM_N, 11
+    .equ MM_N, 12
 mm_items:
     lea     mm_str,%a5
     moveq   #0,%d6                      /* item */
@@ -1525,6 +1525,318 @@ sns_ok:
     SAY     s_so_ok, 10, 8, A_WHITE
     rts
 
+/* ============================= sprite test ============================= */
+/* B1 cycles three parts, B2 exits:
+ *  FLIP      the player's helicopter: normal, flip Y (mirrored), flip X
+ *            (facing down), both. Attribute bit 8 = X, 9 = Y; all four
+ *            must look whole
+ *  PRIORITY  three columns of solid sprites at priority 1, 2, 3 across a
+ *            band of FG tiles and a band of text: 1 must go under both,
+ *            2 over FG but under text, 3 over everything
+ *  FULL      all 512 sprites as a moving grid over the whole screen: the
+ *            sprite line buffers must keep it clean (streaks, missing or
+ *            garbage lines = a line buffer / sprite RAM read fault)
+ * Sprites are placed by text cell (line L, char k): X = 326 - 8L,
+ * Y = 24 + 8k. The list is built in work RAM and copied to sprite RAM in
+ * bursts right after VBLANK. */
+    .equ SPT_MODE,  0x033fa6
+    .equ SPT_POS,   0x033fa8               /* FULL: grid offset */
+    .equ SPT_BUF,   0x031000               /* sprite list being built (4 KiB) */
+    .equ SPR_SOLID, 0x07ee                 /* a solid sprite (one pen everywhere) */
+
+pg_sprtest:
+    move.w  #0,SPT_MODE
+pst_new:
+    bsr     page_init
+    bsr     spt_pal
+    bsr     spt_clrbuf
+    SAY     s_st_t, 0, 0, A_YELLOW
+    SAY     s_st_h, 36, 0, A_GREY
+    move.w  SPT_MODE,%d0
+    jeq     pst_flip
+    cmp.w   #1,%d0
+    jeq     pst_prio
+/* ---- FULL: 512 sprites, 32 x 16 grid every 16 pixels, moving ---- */
+    SAY     s_st_full, 0, 12, A_WHITE
+    SAY     s_st_f1, 34, 0, A_GREY
+    move.w  #0,SPT_POS
+pst_floop:
+    bsr     spt_grid
+    bsr     spt_upload                  /* 8 frames */
+    addq.w  #1,SPT_POS
+    bsr     read_inp
+    move.w  IN_EDGE,%d0
+    jeq     pst_floop
+    jra     pst_key
+/* ---- FLIP: the player's helicopter (5 sprites: $023 $024 top row, $025
+ * $026 bottom row, $027 tail; game colour set $2F) four times: normal, flip
+ * Y (mirrored), flip X (facing down), both. A flip moves the pieces as well,
+ * so every one must look like a whole helicopter. ---- */
+pst_flip:
+    SAY     s_st_flip, 0, 12, A_WHITE
+    SAY     s_st_n, 3, 0, A_WHITE
+    SAY     s_st_fy, 11, 0, A_WHITE
+    SAY     s_st_fy2, 12, 0, A_GREY
+    SAY     s_st_fx, 19, 0, A_WHITE
+    SAY     s_st_fd, 20, 0, A_GREY
+    SAY     s_st_fxy, 27, 0, A_WHITE
+    SAY     s_st_fxy2, 28, 0, A_GREY
+    SAY     s_st_whole, 34, 0, A_GREY
+    bsr     spt_helipal
+    lea     SPT_BUF,%a1
+    lea     heli_tab,%a2
+pfl_1:
+    move.w  (%a2)+,%d0                  /* code, -1 = end */
+    jmi     pfl_2
+    move.w  %d0,(%a1)+
+    move.w  (%a2)+,%d3                  /* flip bits */
+    move.w  %d3,%d0
+    or.w    #0x0c00,%d0                 /* priority 3, colour set 0 */
+    move.w  %d0,(%a1)+
+    move.w  #326,%d0                    /* X = 326 - pixels down (+15 if X-flipped) */
+    sub.w   (%a2)+,%d0
+    btst    #8,%d3
+    jeq     pfl_x
+    add.w   #15,%d0
+pfl_x:
+    lsl.w   #7,%d0
+    move.w  %d0,(%a1)+
+    move.w  (%a2)+,%d0                  /* Y = 24 + pixels right */
+    add.w   #24,%d0
+    lsl.w   #7,%d0
+    move.w  %d0,(%a1)+
+    jra     pfl_1
+pfl_2:
+    bsr     spt_upload
+    jra     pst_wait
+
+/* sprite colour set 0 = the game's set $2F (the red player helicopter) */
+spt_helipal:
+    move.b  #L_SCRNOFF,(%a0)
+    lea     (gamepal + 0x2f*16*2),%a2
+    lea     PAL_SPR0,%a1
+    moveq   #15,%d0
+shp_1:
+    move.w  (%a2)+,(%a1)+
+    dbra    %d0,shp_1
+    move.b  #L_SCRNON,(%a0)
+    rts
+
+    .even
+/* code, flip bits ($100 = X: up/down, $200 = Y: left/right), pixels down from
+ * the top of the screen, pixels right; the helicopters start at character 12 */
+heli_tab:
+    /* 1. normal */
+    .short  0x023, 0x000,  24,  96,   0x024, 0x000,  24, 112
+    .short  0x025, 0x000,  40,  96,   0x026, 0x000,  40, 112
+    .short  0x027, 0x000,  56, 104
+    /* 2. flipped Y: mirrored left/right (the halves swap places) */
+    .short  0x024, 0x200,  88,  96,   0x023, 0x200,  88, 112
+    .short  0x026, 0x200, 104,  96,   0x025, 0x200, 104, 112
+    .short  0x027, 0x200, 120, 104
+    /* 3. all flipped X: facing down (tail on top, rows swapped) */
+    .short  0x027, 0x100, 152, 104
+    .short  0x025, 0x100, 168,  96,   0x026, 0x100, 168, 112
+    .short  0x023, 0x100, 184,  96,   0x024, 0x100, 184, 112
+    /* 4. flipped X and Y: facing down and mirrored (rows and halves swap) */
+    .short  0x027, 0x300, 216, 104
+    .short  0x026, 0x300, 232,  96,   0x025, 0x300, 232, 112
+    .short  0x024, 0x300, 248,  96,   0x023, 0x300, 248, 112
+    .short  -1
+
+/* ---- PRIORITY ---- */
+pst_prio:
+    SAY     s_st_pri, 0, 12, A_WHITE
+    SAY     s_st_p1, 28, 0, A_WHITE
+    SAY     s_st_p2, 30, 0, A_WHITE
+    SAY     s_st_p3, 32, 0, A_WHITE
+    SAY     s_st_lab, 4, 6, A_WHITE
+/* FG band: lines 9-12, all characters (FG colour set 1) */
+    move.w  #(ORG - 9),%d5
+    moveq   #3,%d2
+ppr_fg:
+    move.w  %d5,%d4
+    moveq   #29,%d1
+ppr_fg2:
+    move.w  %d4,FGOFFS
+    move.w  #(0x1000 + FG_SOLID),FGDATA
+    add.w   #CHARSTEP,%d4
+    dbra    %d1,ppr_fg2
+    subq.w  #1,%d5
+    dbra    %d2,ppr_fg
+/* text band: lines 16-19, solid char in text set 5 */
+    move.w  #(ORG - 16),%d5
+    moveq   #3,%d2
+ppr_tx:
+    move.w  %d5,%d4
+    moveq   #29,%d1
+ppr_tx2:
+    move.w  %d4,(%a3)
+    move.w  #(0x2800 + 0x07f6),(%a4)
+    add.w   #CHARSTEP,%d4
+    dbra    %d1,ppr_tx2
+    subq.w  #1,%d5
+    dbra    %d2,ppr_tx
+    SAY     s_st_fg, 10, 0, A_WHITE
+    SAY     s_st_tx, 17, 0, A_YELLOW
+/* three columns at chars 6, 14, 22; priorities 1, 2, 3 in colour sets 1, 2, 3 */
+    lea     SPT_BUF,%a1
+    moveq   #1,%d3                      /* priority = colour set */
+ppr_col:
+    move.w  #6,%d6                      /* top line */
+ppr_spr:
+    move.w  #SPR_SOLID,(%a1)+
+    move.w  %d3,%d0
+    lsl.w   #8,%d0
+    lsl.w   #2,%d0                      /* priority << 10 */
+    or.w    %d3,%d0                     /* colour set */
+    move.w  %d0,(%a1)+
+    move.w  %d6,%d0
+    bsr     spt_x
+    move.w  %d0,(%a1)+
+    move.w  %d3,%d0
+    lsl.w   #3,%d0
+    subq.w  #2,%d0                      /* char 6 / 14 / 22 */
+    bsr     spt_y
+    move.w  %d0,(%a1)+
+    addq.w  #2,%d6
+    cmp.w   #24,%d6
+    jne     ppr_spr
+    addq.w  #1,%d3
+    cmp.w   #4,%d3
+    jne     ppr_col
+    bsr     spt_upload
+pst_wait:
+    bsr     wait_frame
+    bsr     read_inp
+    move.w  IN_EDGE,%d0
+    jeq     pst_wait
+pst_key:
+    btst    #5,%d0
+    jne     pst_exit
+    btst    #4,%d0
+    jeq     pst_wait
+    move.w  SPT_MODE,%d0
+    addq.w  #1,%d0
+    cmp.w   #3,%d0
+    jcs     pst_m
+    moveq   #0,%d0
+pst_m:
+    move.w  %d0,SPT_MODE
+    bsr     wait_release
+    jra     pst_new
+pst_exit:
+    bsr     spt_clrbuf
+    bsr     spt_upload
+    bsr     wait_release
+    rts
+
+/* D0 = top text line -> X register; D0 = left character -> Y register */
+spt_x:
+    lsl.w   #3,%d0
+    neg.w   %d0
+    add.w   #326,%d0
+    lsl.w   #7,%d0
+    rts
+spt_y:
+    lsl.w   #3,%d0
+    add.w   #24,%d0
+    lsl.w   #7,%d0
+    rts
+
+/* empty sprite list (priority 0 everywhere = nothing drawn) */
+spt_clrbuf:
+    lea     SPT_BUF,%a1
+    move.w  #SPR_WORDS-1,%d0
+pcb_c:
+    clr.w   (%a1)+
+    dbra    %d0,pcb_c
+    rts
+
+/* copy the list to sprite RAM: 8 bursts of 256 words, each right after VBLANK */
+spt_upload:
+    lea     SPT_BUF,%a2
+    lea     SPR_BASE,%a1
+    moveq   #SPR_NCHUNK-1,%d2
+pup_1:
+    bsr     wait_frame
+    move.w  #SPR_CHUNK-1,%d0
+pup_2:
+    move.w  (%a2)+,(%a1)+
+    dbra    %d0,pup_2
+    dbra    %d2,pup_1
+    rts
+
+/* FULL grid: sprite i at column i % 32, row i / 32, every 16 px, shifted by
+ * SPT_POS; colour sets 4-11 by (column + row) & 7; priority 2 (under text) */
+spt_grid:
+    lea     SPT_BUF,%a1
+    moveq   #0,%d5                      /* i */
+pgr_1:
+    move.w  #SPR_SOLID,(%a1)+
+    move.w  %d5,%d0
+    move.w  %d5,%d1
+    lsr.w   #5,%d1
+    add.w   %d1,%d0
+    and.w   #7,%d0
+    addq.w  #4,%d0
+    or.w    #0x0800,%d0
+    move.w  %d0,(%a1)+
+    move.w  %d5,%d0
+    and.w   #31,%d0
+    lsl.w   #4,%d0
+    add.w   SPT_POS,%d0
+    and.w   #0x01ff,%d0
+    lsl.w   #7,%d0
+    move.w  %d0,(%a1)+
+    move.w  %d5,%d0
+    lsr.w   #5,%d0
+    lsl.w   #4,%d0
+    add.w   SPT_POS,%d0
+    and.w   #0x01ff,%d0
+    lsl.w   #7,%d0
+    move.w  %d0,(%a1)+
+    addq.w  #1,%d5
+    cmp.w   #512,%d5
+    jne     pgr_1
+    rts
+
+/* sprite colour sets: 0 = plane colours (every pen visible), 1-3 red /
+ * green / white, 4-11 the grid colours; text set 5 pen 7 grey (text band),
+ * FG set 1 blue (FG band) */
+spt_pal:
+    move.b  #L_SCRNOFF,(%a0)
+    lea     PAL_SPR0,%a1
+    moveq   #0,%d0
+psp_g:
+    bsr     plane_col4
+    move.w  %d1,(%a1)+
+    addq.w  #1,%d0
+    cmp.w   #16,%d0
+    jne     psp_g
+    lea     spt_cols,%a2
+    moveq   #10,%d1                     /* sets 1-11 */
+psp_s:
+    move.w  (%a2)+,%d0
+    moveq   #15,%d2
+psp_p:
+    move.w  %d0,(%a1)+
+    dbra    %d2,psp_p
+    dbra    %d1,psp_s
+    move.w  #0x4210,(PAL_TXT0 + (5*8 + 7)*2)
+    lea     (PAL_FG0 + 16*2),%a1
+    moveq   #15,%d0
+psp_f:
+    move.w  #0x5800,(%a1)+
+    dbra    %d0,psp_f
+    move.b  #L_SCRNON,(%a0)
+    rts
+
+    .even
+spt_cols:
+    .short  0x001f, 0x03e0, 0x7fff
+    .short  0x001f, 0x01ff, 0x03ff, 0x03e0, 0x7fe0, 0x7c00, 0x7c1f, 0x4210
+
 /* =============================== DSP test ============================== */
 /* The same self-test as stage 7, on demand; B1 runs it again, B2 exits. */
 pg_dsp:
@@ -1571,10 +1883,10 @@ pdp_exit:
     .even
 mm_jt:
     .long   pg_rerun, pg_loopmenu, pg_inputs, pg_colour, pg_txview
-    .long   pg_fgview, pg_bgview, pg_sprview, pg_scroll, pg_sound, pg_dsp
+    .long   pg_fgview, pg_bgview, pg_sprview, pg_sprtest, pg_scroll, pg_sound, pg_dsp
 mm_str:
     .long   s_m_rerun, s_m_loop, s_m_in, s_m_col, s_m_tx
-    .long   s_m_fg, s_m_bg, s_m_spr, s_m_scr, s_m_snd, s_m_dsp
+    .long   s_m_fg, s_m_bg, s_m_spr, s_m_spt, s_m_scr, s_m_snd, s_m_dsp
 pv_titles:
     .long   s_pv_tx, s_pv_fg, s_pv_bg
 in_jn:
@@ -1601,6 +1913,7 @@ s_m_tx:    .asciz "TEXT TILE VIEWER"
 s_m_fg:    .asciz "FG TILE VIEWER"
 s_m_bg:    .asciz "BG TILE VIEWER"
 s_m_spr:   .asciz "SPRITE VIEWER"
+s_m_spt:   .asciz "SPRITE TEST"
 s_m_scr:   .asciz "SCROLL TEST"
 s_m_snd:   .asciz "SOUND TEST"
 s_m_dsp:   .asciz "DSP TEST"
@@ -1638,6 +1951,26 @@ s_pv_col:  .asciz "COLOUR"
 s_pv_pl:   .asciz "PLANES   "
 s_so_t:    .asciz "SOUND TEST"
 s_dp_t:    .asciz "DSP TEST"
+s_st_t:    .asciz "SPRITE TEST"
+s_st_h:    .asciz "B1 NEXT PART  B2 EXIT"
+s_st_flip: .asciz "FLIP"
+s_st_pri:  .asciz "PRIORITY"
+s_st_full: .asciz "FULL SCREEN"
+s_st_f1:   .asciz "GRID MUST STAY CLEAN"
+s_st_n:    .asciz "NORMAL"
+s_st_fy:   .asciz "FLIP Y"
+s_st_fy2:  .asciz "MIRRORED"
+s_st_fx:   .asciz "FLIP X"
+s_st_fd:   .asciz "FACING DOWN"
+s_st_fxy:  .asciz "FLIP X AND Y"
+s_st_fxy2: .asciz "DOWN AND MIRRORED"
+s_st_whole: .asciz "ALL FOUR MUST LOOK WHOLE"
+s_st_lab:  .asciz "P1      P2      P3"
+s_st_fg:   .asciz "FG"
+s_st_tx:   .asciz "TEXT"
+s_st_p1:   .asciz "P1 UNDER FG AND TEXT"
+s_st_p2:   .asciz "P2 OVER FG UNDER TEXT"
+s_st_p3:   .asciz "P3 OVER EVERYTHING"
 s_dp_h:    .asciz "B1 RUN AGAIN  B2 EXIT"
 s_dp_wait: .asciz "RUNNING SELFTEST            "
 s_dp_clr:  .asciz "                            "
