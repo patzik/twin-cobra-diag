@@ -44,6 +44,7 @@ SOUND CPU   OK                     (or NOT RUNNING / ROM SUM BAD / NO REPLY CMD 
 SOUND ROM   80ECFF66 TC WORLD      CRC32 of sound ROM $4000-$6FFF, read through the Z80
 VBLANK IRQ  PASS                   stage 6: interrupts (or FAIL)
 OFF 0000 ON 0032 OTHER 0000          IRQs counted: enable off / on (50 frames) / other levels
+DSP         OK SELFTEST 76         stage 7: the game's DSP self-test (or FAIL / NO REPLY / SKIPPED)
 ALL TESTS PASS                     (or SOME TESTS FAILED)
 ```
 
@@ -67,7 +68,8 @@ the text report replaced that.
 - **Main menu** — input/DIP test, colour test, text/FG/BG tile viewers, sprite viewer,
   scroll test for all three layers, sound test, RAM loop test, rerun. Verified in MAME (`doc/menu_pages.png`, `doc/menu_viewers.png`).
 
-Next: a DSP (TMS320C10) test, per [../SPEC.md](../SPEC.md).
+- **Stage 7** — DSP (TMS320C10): the game's own self-test. Verified in MAME (pass, a bad
+  DSP ROM bit, a dead DSP). Also on the menu as DSP TEST.
 
 ## Heartbeat / result codes (mainlatch LS259 Q2, pin 6, of $7800D)
 - **Nothing toggling** → the 68000 is not executing: check 28 MHz clock + divisions,
@@ -86,8 +88,10 @@ even with dead RAM:
 3. march patterns AAAA then 5555 (each cell must hold both polarities).
 
 ## Loop-test menu (for scoping a failing RAM)
-When the tests finish (pass or fail, including a work-RAM failure) the screen shows
-`P1 BUTTON 1  LOOP TEST MENU`. Hold P1 button 1 to open it:
+When the tests finish the screen shows `P1 BUTTON 1  MAIN MENU`; the loop test is the
+main menu's RAM LOOP TEST entry. If **work RAM failed**, the main menu can't run (it needs
+the stack), so the screen shows `P1 BUTTON 1  LOOP TEST MENU` and button 1 opens this menu
+directly:
 
 ```
 LOOP TEST  STICK SELECTS
@@ -276,6 +280,7 @@ needs the stack.
 | SPRITE VIEWER | 64 sprites per page |
 | SCROLL TEST | Scrolls the text, FG or BG layer over a test pattern |
 | SOUND TEST | Sends a sound code to the Z80 and shows whether it answered |
+| DSP TEST | Runs the DSP self-test again (stage 7); B1 repeats it |
 
 ![menu pages](doc/menu_pages.png)
 ![viewers](doc/menu_viewers.png)
@@ -393,6 +398,33 @@ A missing pull-up leaves `/IPL2` floating, which gives interrupts at random mome
 
 Left: good board. Right: an interrupt let through while the enable is off.
 
+## Stage 7 — DSP (TMS320C10)
+The diag otherwise keeps the DSP disabled and in reset. Stage 7 runs the game's own DSP
+self-test (twincobr `$23C98`), the way the game does at start-up:
+
+1. start the DSP: latch `0D`, then its reset `00` → `01`;
+2. write command `1` to `$30000` (work RAM, shared with the DSP);
+3. latch `0C` → `0D`: this interrupts the DSP, which takes the 68000's bus, runs the test
+   (a check of its program ROM), writes the result to `$3000E` and `0` to `$30000`, and
+   hands the bus back;
+4. wait for `$30000` = 0 (timeout ~1.5 s) and read `$3000E`. The game wants **`$76`**.
+
+| Screen | Meaning |
+|---|---|
+| `DSP OK SELFTEST 76` | the DSP runs, can reach work RAM, and its program ROM sums right |
+| `DSP FAIL` + `RESULT xxxx EXPECTED 0076` | it ran, but the result is wrong: suspect its program ROM (on the bootleg two 2732 EPROMs, A4 and A6 on the schematic; MAME notes A0/A1 are swapped between the DSP and these ROMs) or its data path |
+| `DSP NO REPLY` | it gave the bus back but never cleared the command: not running its code (clock: CD6 pin 8, 14 MHz; reset: CD6 pin 4 = LS259 K17 pin 4; `/INT`: CD6 pin 5) |
+| stops on `STOPS HERE = DSP HOLDS BUS` | it took the bus and never gave it back: the 68000 waits for good (68000 `/BGACK` pin 12 stuck low). Check the DSP, its clock, its PROMs and the bus-request logic (74LS74 E2/E3, 74LS32 D1) |
+
+A board whose DSP holds the bus would never get past stage 7, so before the test the diag
+waits about 4 seconds with a flashing `HOLD B2 TO SKIP DSP TEST`: pressing **P1 button 2**
+then skips it (`DSP SKIPPED`), and the menu still works. The game itself hangs the
+same way on such a board: it switches the DSP on at start-up.
+
+![DSP test](doc/stage7_dsp.png)
+
+Left to right: good board, one bad bit in the DSP ROM, dead DSP (forced in MAME).
+
 ## Fault-injection test (how the FAIL path was verified)
 Build a variant whose RAM test points at ROM so writes can't stick:
 ```
@@ -415,9 +447,10 @@ CRCs match Python's `zlib.crc32` for those bytes).
 The game enables the TMS320C10 DSP at boot (control latch `$7800D` bit Q6 = 1), which
 hands the DSP the 68000 bus. On a board with a dead/absent/non-responding DSP — common on
 bootlegs — enabling it **stalls the 68000**, giving a black screen with only a brief burst
-of activity at power-up. This diagnostic deliberately keeps the DSP **disabled** (Q6 = 0)
-and held in reset, so the 68000 never hands off the bus. If a board runs this diagnostic
-but dies on the real game, suspect the **DSP subsystem**.
+of activity at power-up. This diagnostic keeps the DSP **disabled** (Q6 = 0)
+and held in reset through stages 1-6, so the 68000 never hands off the bus, and only
+switches it on for the stage 7 DSP test (which can be skipped with P1 button 2 during its
+4-second countdown).
 
 ## Dead-board bring-up order
 1. **Heartbeat ROM** (`build/twincobr_hb_7j.bin` / `_7h.bin`, `make hb`): toggles the

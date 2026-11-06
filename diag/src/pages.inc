@@ -80,7 +80,7 @@ mm_ok:
     bsr     page_init
     bsr     wait_release                /* a button still held is not a new press */
     SAY     s_mtitle, 0, 0, A_YELLOW
-    SAY     s_mhelp, 24, 0, A_GREY
+    SAY     s_mhelp, 26, 0, A_GREY
 mm_draw:
     bsr     mm_items
 mm_loop:
@@ -116,7 +116,7 @@ mm_3:
     jsr     (%a1)
     jra     main_menu
 
-    .equ MM_N, 10
+    .equ MM_N, 11
 mm_items:
     lea     mm_str,%a5
     moveq   #0,%d6                      /* item */
@@ -1525,15 +1525,56 @@ sns_ok:
     SAY     s_so_ok, 10, 8, A_WHITE
     rts
 
+/* =============================== DSP test ============================== */
+/* The same self-test as stage 7, on demand; B1 runs it again, B2 exits. */
+pg_dsp:
+    bsr     page_init
+    SAY     s_dp_t, 0, 0, A_YELLOW
+    SAY     s_dp_exp, 4, 0, A_GREY
+    SAY     s_dp_h, 24, 0, A_GREY
+pdp_run:
+    SAY     s_dp_wait, 3, 0, A_WHITE
+    SAY     dsphang, 6, 0, A_GREY
+    bsr     dsp_run
+    SAY     s_dp_clr, 6, 0, A_GREY
+    tst.w   %d0
+    jeq     pdp_ans
+    SAY     s_dp_nr, 3, 0, A_YELLOW
+    jra     pdp_wait
+pdp_ans:
+    SAY     s_dp_res, 3, 0, A_WHITE
+    move.w  #(ORG - 3 + 7*CHARSTEP),%d4
+    moveq   #4,%d3
+    move.w  #A_YELLOW,%d2
+    bsr     prh
+    cmp.w   #DSP_GOOD,%d5
+    jne     pdp_bad
+    SAY     s_dp_ok, 3, 13, A_WHITE
+    jra     pdp_wait
+pdp_bad:
+    SAY     s_dp_bad, 3, 13, A_YELLOW
+pdp_wait:
+    bsr     wait_frame
+    bsr     read_inp
+    move.w  IN_EDGE,%d0
+    btst    #5,%d0
+    jne     pdp_exit
+    btst    #4,%d0
+    jeq     pdp_wait
+    jra     pdp_run
+pdp_exit:
+    bsr     wait_release
+    rts
+
 /* ------------------------------ jump table ----------------------------- */
     .include "gamepal.inc"
     .even
 mm_jt:
     .long   pg_rerun, pg_loopmenu, pg_inputs, pg_colour, pg_txview
-    .long   pg_fgview, pg_bgview, pg_sprview, pg_scroll, pg_sound
+    .long   pg_fgview, pg_bgview, pg_sprview, pg_scroll, pg_sound, pg_dsp
 mm_str:
     .long   s_m_rerun, s_m_loop, s_m_in, s_m_col, s_m_tx
-    .long   s_m_fg, s_m_bg, s_m_spr, s_m_scr, s_m_snd
+    .long   s_m_fg, s_m_bg, s_m_spr, s_m_scr, s_m_snd, s_m_dsp
 pv_titles:
     .long   s_pv_tx, s_pv_fg, s_pv_bg
 in_jn:
@@ -1562,6 +1603,7 @@ s_m_bg:    .asciz "BG TILE VIEWER"
 s_m_spr:   .asciz "SPRITE VIEWER"
 s_m_scr:   .asciz "SCROLL TEST"
 s_m_snd:   .asciz "SOUND TEST"
+s_m_dsp:   .asciz "DSP TEST"
 s_exit:    .asciz "B2 EXIT"
 s_in_t:    .asciz "INPUT AND DIP TEST"
 s_in_p1:   .asciz "P1"
@@ -1595,6 +1637,15 @@ s_pv_h2:   .asciz "B1 COLOURS  B2 EXIT"
 s_pv_col:  .asciz "COLOUR"
 s_pv_pl:   .asciz "PLANES   "
 s_so_t:    .asciz "SOUND TEST"
+s_dp_t:    .asciz "DSP TEST"
+s_dp_h:    .asciz "B1 RUN AGAIN  B2 EXIT"
+s_dp_wait: .asciz "RUNNING SELFTEST            "
+s_dp_clr:  .asciz "                            "
+s_dp_nr:   .asciz "NO REPLY                    "
+s_dp_res:  .asciz "RESULT                      "
+s_dp_ok:   .asciz "OK "
+s_dp_bad:  .asciz "BAD"
+s_dp_exp:  .asciz "EXPECTED 0076"
 s_sc_t:    .asciz "SCROLL TEST"
 s_sc_l:    .asciz "LAYER"
 s_sc_m:    .asciz "MODE"

@@ -55,7 +55,9 @@
     .equ L_SDAT,    (ORG - 20)
     .equ L_IRQ,     (ORG - 22)             /* stage 6: interrupts */
     .equ L_IRQD,    (ORG - 23)
-    .equ L_END,     (ORG - 25)
+    .equ L_DSP,     (ORG - 25)             /* stage 7: DSP */
+    .equ L_DSPD,    (ORG - 26)
+    .equ L_END,     (ORG - 28)
 
     /* Stage 3 targets (overridable with --defsym for fault-injection tests) */
 .ifndef PROG2
@@ -89,12 +91,12 @@
     .equ P1IN,      0x078004               /* P1 inputs, active high: */
                                            /* bit0 up, 1 down, 2 left, 3 right, 4 B1, 5 B2 */
     .equ MENU_DLY,  0x00002000             /* ~20 ms input poll / debounce delay */
-    .equ L_HINT,    (ORG - 27)
-    .equ L_M0,      (ORG - 29)
-    .equ L_M1,      (ORG - 30)
-    .equ L_M2,      (ORG - 31)
-    .equ L_M3,      (ORG - 33)
-    .equ L_M4,      (ORG - 34)
+    .equ L_HINT,    (ORG - 30)
+    .equ L_M0,      (ORG - 32)
+    .equ L_M1,      (ORG - 33)
+    .equ L_M2,      (ORG - 34)
+    .equ L_M3,      (ORG - 36)
+    .equ L_M4,      (ORG - 37)
 
     /* stage 6: interrupt counters (work RAM) */
     .equ IRQON,     0x033fe0               /* nonzero: VBLANK IRQ enabled on purpose */
@@ -953,6 +955,66 @@ irq_det:
     move.w  IRQCO,%d6                   /* (PRINTHEX uses D4 itself) */
     PRINTHEX %d6, 4, (L_IRQD + 24*CHARSTEP)
 
+/* ====== STAGE 7: DSP (TMS320C10) ======
+ * Runs the game's own DSP self-test (twincobr $23C98): command 1 in $30000,
+ * latch 0C then 0D interrupts the DSP, which takes the 68000's bus, does the
+ * test, writes the result to $3000E and 0 to $30000, and hands the bus
+ * back. The game wants $76. If the DSP takes the bus and never gives it back
+ * the 68000 stops for good - hence the "STOPS HERE" line. */
+/* first ~4 s (240 frames) with a flashing "HOLD B2 TO SKIP DSP TEST": a board
+ * whose DSP holds the bus can then still reach the menu */
+    PRINTSTR dspwait, L_DSP
+    moveq   #0,%d6                      /* frame */
+dsk_1:
+    btst    #4,%d6                      /* flash: 16 frames on, 16 off */
+    jne     dsk_off
+    PRINTSTR dspskp, L_DSPD
+    jra     dsk_2
+dsk_off:
+    PRINTSTR dspblank, L_DSPD
+dsk_2:
+    tst.w   VBDEAD
+    jne     dsk_dly
+    VBWAIT
+    jra     dsk_3
+dsk_dly:
+    DELAY   0x3000
+dsk_3:
+    move.w  P1IN,%d0
+    btst    #5,%d0                      /* P1 button 2 */
+    jne     dsk_skip
+    addq.w  #1,%d6
+    cmp.w   #240,%d6
+    jcs     dsk_1
+    jra     dsp_go
+dsk_skip:
+    PRINTSTR dspskip, L_DSP
+    PRINTSTR dspblank, L_DSPD
+    jra     dsp_done
+dsp_go:
+    PRINTSTR dsptest, L_DSP
+    PRINTSTR dsphang, L_DSPD
+    bsr     dsp_run                     /* D0 = 0 answered / 1 no reply, D5 = result */
+    tst.w   %d0
+    jne     dsp_norep
+    cmp.w   #DSP_GOOD,%d5
+    jne     dsp_bad
+    PRINTSTR dspok, L_DSP
+    PRINTSTR dspblank, L_DSPD
+    jra     dsp_done
+dsp_norep:
+    PRINTSTR dspnore, L_DSP
+    PRINTSTR dspblank, L_DSPD
+    jra     dsp_fail
+dsp_bad:
+    PRINTSTR dspbad, L_DSP
+    PRINTSTR dspres, L_DSPD
+    PRINTHEX %d5, 4, (L_DSPD + 7*CHARSTEP)
+dsp_fail:
+    lea     FLAG,%a1
+    move.w  #1,(%a1)
+dsp_done:
+
 /* summary line + heartbeat pattern */
     lea     FLAG,%a1
     tst.w   (%a1)
@@ -966,7 +1028,7 @@ some_fail:
 /* ===================== liveness on the heartbeat pin =====================
  * Both end states also watch P1 button 1, which opens the loop-test menu. */
 pass_hold:
-    PRINTSTR m_hint, L_HINT
+    PRINTSTR m_hintmm, L_HINT
 pass_loop:
     move.b  #L_HB1,(%a0)
     DLYCHK  mm_enter
@@ -975,7 +1037,7 @@ pass_loop:
     jra     pass_loop
 
 fail_hold:
-    PRINTSTR m_hint, L_HINT
+    PRINTSTR m_hintmm, L_HINT
 fail_loop:
     moveq   #3,%d4
 fp:
@@ -1303,6 +1365,38 @@ exc_pc:
     move.w  #1,(%a1)
     jra     fail_hold
 
+/* ---- DSP self-test (stage 7 and the menu's DSP TEST). Leaves the DSP in
+ * reset and disabled again. Out: D0 = 0 if it answered (D5 = its result
+ * word from $3000E), 1 if it never cleared the command. Uses D0,D5,D7. ---- */
+    .equ DSP_CMD,   0x030000               /* command word the DSP reads */
+    .equ DSP_RES,   0x03000e               /* its answer */
+    .equ DSP_GOOD,  0x0076                 /* what the game expects (command 1) */
+dsp_run:
+/* start it the way the game does at boot: 0D, then pulse its reset */
+    move.b  #0x0d,(%a0)
+    move.b  #L_DSPRST0,(%a0)
+    DELAY   0x0100
+    move.b  #0x01,(%a0)
+    DELAY   0x4000                      /* let it reach its idle loop */
+    clr.w   DSP_CMD+14
+    move.w  #1,DSP_CMD                  /* command 1: self-test */
+    move.b  #L_DSP_OFF,(%a0)            /* 0C then 0D: interrupt it */
+    move.b  #0x0d,(%a0)
+    moveq   #0,%d0
+    move.l  #0x00040000,%d7             /* ~1.5 s */
+dr_w:
+    tst.w   DSP_CMD
+    jeq     dr_ok
+    subq.l  #1,%d7
+    jne     dr_w
+    moveq   #1,%d0
+dr_ok:
+    moveq   #0,%d5
+    move.w  DSP_RES,%d5
+    move.b  #L_DSP_OFF,(%a0)            /* back to: disabled and held in reset */
+    move.b  #L_DSPRST0,(%a0)
+    rts
+
 /* ---- interrupt handlers (stage 6). They touch no registers. ---- */
 /* VBLANK: count it; re-arm only if it is meant to be on. An interrupt while
  * it is meant to be off is counted once, then the stacked SR is raised to
@@ -1360,6 +1454,16 @@ snddead:   .asciz "SOUND CPU   NOT RUNNING"
 sndnorep:  .asciz "SOUND CPU   NO REPLY CMD"
 sndsum:    .asciz "SOUND CPU   ROM SUM BAD"
 irqwait:   .asciz "VBLANK IRQ  TESTING"
+dsptest:   .asciz "DSP         TESTING    "
+dspskip:   .asciz "DSP         SKIPPED    "
+dspwait:   .asciz "DSP         STARTS SOON"
+dspskp:    .asciz "HOLD B2 TO SKIP DSP TEST  "
+dsphang:   .asciz "STOPS HERE = DSP HOLDS BUS"
+dspok:     .asciz "DSP         OK SELFTEST 76"
+dspnore:   .asciz "DSP         NO REPLY      "
+dspbad:    .asciz "DSP         FAIL          "
+dspres:    .asciz "RESULT      EXPECTED 0076     "
+dspblank:  .asciz "                          "
 irqok:     .asciz "VBLANK IRQ  PASS   "
 irqbad:    .asciz "VBLANK IRQ  FAIL   "
 irqdet:    .asciz "OFF      ON       OTHER     "
@@ -1455,7 +1559,8 @@ crc32tab:
     .long 0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d
 
 /* ---- loop-test menu strings and target table ---- */
-m_hint:  .asciz "P1 BUTTON 1  LOOP TEST MENU"
+m_hint:  .asciz "P1 BUTTON 1  LOOP TEST MENU"   /* work RAM failed: only the loop menu */
+m_hintmm: .asciz "P1 BUTTON 1  MAIN MENU     "
 m_title: .asciz "LOOP TEST  STICK SELECTS"
 m_tgt:   .asciz "TARGET"
 m_keys:  .asciz "B1 START  B2 STOP  IN"
