@@ -55,6 +55,8 @@ the text report replaced that.
   forced FG fault).
 - **Stage 5** — Z80 shared RAM, Z80 start-up handshake, sound ROM sum and CRC through the
   Z80. Verified in MAME (pass, dead Z80, bad shared RAM, no start signal, bad sound ROM).
+  An earlier build hung on real boards right after `BG VRAM PASS` (it tested shared RAM
+  with the Z80 in reset); fixed, see the stage 5 section.
 
 Next stages (DSP self-test, inputs) per [../SPEC.md](../SPEC.md).
 
@@ -143,33 +145,57 @@ ROM and waits for an answer with **no timeout** (`$25F4A`: wait for `FF` at `$7A
 A dead Z80, bad sound ROM or bad shared RAM gives a permanent black screen with the
 screen-enable latch (LS259 pin 12) low, and the sound-reset latch (pin 5) high.
 
-1. **Shared RAM** `$7A000-$7AFFF` (2 KiB, 8-bit: the low byte of each word; Z80 `$8000-$87FF`),
-   tested with the Z80 held in reset (latch `0x02`).
-2. **Z80 start-up**, using the protocol from the game and its Z80 code (`$2F7B`):
-   - release the Z80 (latch `0x03`). Its first code must write `FF` to `$8000`; if that never
-     appears: `SOUND CPU NOT RUNNING`. Check its clock (pin 6), `/RESET` (26), `/WAIT` (24),
-     `/HALT` (18), the sound ROM socket and the shared-RAM path.
+**The 68000 can only reach shared RAM through the Z80's bus.** On the bootleg schematic an
+access to `$7Axxx` drives the Z80's `/BUSRQ` (pin 25, from K12 74LS138 output O5) and the
+68000 waits until the Z80 answers `/BUSACK` (pin 23, via K4 74LS74 and K5 74LS32 into the
+J16 DTACK gate). A Z80 that is held in reset, has no clock, or is dead never answers, and
+the 68000 then waits forever; no software timeout can catch that. So before it touches
+shared RAM the diag releases the Z80 and prints:
+
+```
+SHARED RAM  WAIT Z80 BUS
+```
+
+**If the screen stops on that line, the Z80 is not granting its bus.** Check, on the Z80:
+clock (pin 6), `/RESET` (26, must be high), `/BUSRQ` (25, goes low and stays low = the
+68000 is asking), `/BUSACK` (23, never goes low = the Z80 is not answering), then the
+K4 / K5 / J16 path back to the 68000's `/DTACK` (pin 10).
+
+(An earlier build tested shared RAM with the Z80 held in reset: that hangs on real boards
+right after `BG VRAM PASS`. MAME doesn't model the bus request, so it passed there.)
+
+1. **Z80 start-up**, using the protocol from the game and its Z80 code (`$2F7B`): out of
+   reset its first code writes `FF` to `$8000` (68000 `$7A001`) and `00` to `$8001`, then
+   waits for `AA` at `$8001`. No `FF` within ~3.5 s: `SOUND CPU NOT RUNNING` (reported after
+   the shared RAM test). Check its clock, `/WAIT` (24), `/HALT` (18) and the sound ROM.
+2. **Shared RAM** `$7A000-$7AFFF` (2 KiB, 8-bit: the low byte of each word; Z80 `$8000-$87FF`),
+   tested while the Z80 sits waiting for `AA`. The march patterns are `A5`/`5A` rather than
+   `AA`/`55`, so the test can't start the Z80 by accident.
+3. **Start and ROM check:**
    - write `AA` (start). The Z80 adds up its whole ROM; if the sum is not 0 it writes `00` and
      stops for good: `SOUND CPU ROM SUM BAD` - re-read / replace the sound ROM.
    - send the game's 12 commands `F0`-`FB`: for each the Z80 copies 1 KiB of its ROM
      (`$4000 + n*$400`) into shared RAM and answers `FF`. No answer: `NO REPLY CMD xx`.
-3. **Sound ROM CRC32** over those 12 blocks (`$4000-$6FFF`), so the sound ROM is checked
+4. **Sound ROM CRC32** over those 12 blocks (`$4000-$6FFF`), so the sound ROM is checked
    through the Z80 itself. `80ECFF66` = `b30_05_ii.4f` (Twin Cobra World). Other sets use a
    different sound ROM and show `UNKNOWN`, which is **not** counted as a failure.
 
-The loop-test menu has a fourth target, **SHARED RAM** (`$7A000`), and holds the Z80 in reset
-while the menu runs. Only D0-D7 are real there; D8-D15 read back whatever floats.
+The loop-test menu has a fourth target, **SHARED RAM** (`$7A000`). Entering the menu restarts
+the Z80 and leaves it waiting for `AA`, so it only reads `$8001` and keeps granting its bus.
+Only D0-D7 are real there; D8-D15 read back whatever floats.
 
 ![pass](doc/stage5_pass.png)
 
-Left to right: good board, dead Z80, bad shared RAM bit, bad FG video RAM bit, Z80 never
-gets the start signal (`doc/stage5_faults.png`):
+Left to right: good board, dead Z80, bad shared RAM bit, Z80 never gets the start signal,
+bad sound ROM, loop menu on SHARED RAM (`doc/stage5_faults.png`):
 
 ![faults](doc/stage5_faults.png)
 
 **MAME note:** MAME does not wire latch Q1 to the Z80 reset (the Z80 always runs), but the
-bootleg schematic does (LS259 K17 pin 5 → Z80 `/RESET`). The stage-5 tests in MAME were run
-with a Lua script that adds that wiring.
+bootleg schematic does (LS259 K17 pin 5 → Z80 `/RESET`). MAME also doesn't model the
+`/BUSRQ`-`/BUSACK` handshake. The stage-5 tests in MAME were run with a Lua script that adds
+the reset wiring and flags any 68000 access to shared RAM while the Z80 is in reset (a hang
+on real hardware).
 
 ## Fault-injection test (how the FAIL path was verified)
 Build a variant whose RAM test points at ROM so writes can't stick:

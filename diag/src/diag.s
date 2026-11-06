@@ -303,7 +303,7 @@ rp\@:
  * uniqueness, then AAAA and 5555 marches. Only bits in <mask> are compared.
  * On mismatch: A5 = address, D5 = expected, D6 = got, then jump to <fail>.
  * Uses A1,A2,D0-D3. */
-.macro RAMTEST base, nwords, mask, fail
+.macro RAMTEST base, nwords, mask, fail, p1=0xaaaa, p2=0x5555
     lea     \base,%a2
     move.w  #1,%d2
 ta\@:
@@ -340,7 +340,7 @@ td\@:
     jne     tx\@
     addq.w  #1,%d2
     dbra    %d0,td\@
-    move.w  #0xaaaa,%d2
+    move.w  #\p1,%d2
     lea     \base,%a1
     move.w  #\nwords-1,%d0
 te\@:
@@ -356,7 +356,7 @@ tf\@:
     cmp.w   %d3,%d1
     jne     tx\@
     dbra    %d0,tf\@
-    move.w  #0x5555,%d2
+    move.w  #\p2,%d2
     lea     \base,%a1
     move.w  #\nwords-1,%d0
 tg\@:
@@ -816,9 +816,27 @@ bg_done:
 vr_done:
 
 /* ====== STAGE 5: sound CPU (Z80) ======
- * 5a. shared RAM with the Z80 held in reset (8-bit: low byte only). */
-    move.b  #L_SNDRST0,(%a0)
-    RAMTEST SHR_BASE, SHR_WORDS, 0x00ff, shr_fail
+ * The 68000 reaches shared RAM only by taking the Z80's bus: an access to
+ * $7Axxx drives Z80 /BUSRQ and waits for /BUSACK (bootleg schematic: K12
+ * 74LS138 O5 -> Z80 pin 25; Z80 pin 23 -> K4 74LS74 -> K5 74LS32 -> DTACK).
+ * A Z80 in reset, without clock, or dead never answers, and the 68000 then
+ * waits forever - no software timeout can catch that. So the Z80 is released
+ * first, and a line on screen says what a hang here means. */
+    PRINTSTR shrwait, L_SHR
+    move.b  #L_SNDRUN,(%a0)             /* release the Z80 */
+    DELAY   0x2000                      /* let it reach its start-up code */
+/* 5a. its first code writes FF to $8000 (68000 $7A001) and 00 to $8001, then
+ *     waits for AA at $8001. D4 = 1 if FF never came. */
+    moveq   #0,%d4
+    ZWAIT   z_noff
+    jra     z_ff
+z_noff:
+    moveq   #1,%d4
+z_ff:
+    move.w  %d4,-(%sp)
+/* 5b. shared RAM (8-bit: low byte only), while the Z80 waits for AA. The
+ *     march patterns avoid AA so it is not started by accident. */
+    RAMTEST SHR_BASE, SHR_WORDS, 0x00ff, shr_fail, 0xa5a5, 0x5a5a
     PRINTSTR shrok, L_SHR
     jra     shr_done
 shr_fail:
@@ -827,15 +845,14 @@ shr_fail:
     lea     FLAG,%a1
     move.w  #1,(%a1)
 shr_done:
-
-/* 5b. release the Z80: it must write FF to $8000 from its own ROM code,
- *     then answer the game's 12 ROM-block commands. The blocks are CRC'd,
- *     which checks the sound ROM through the Z80. */
+    move.w  (%sp)+,%d4
+    tst.w   %d4
+    jne     snd_dead
+/* 5c. the Z80 is running and waiting: it must sum its ROM after AA, then
+ *     answer the game's 12 ROM-block commands. The blocks are CRC'd, which
+ *     checks the sound ROM through the Z80. */
     lea     SHR_BASE,%a1
-    clr.w   (%a1)
-    clr.w   2(%a1)
-    move.b  #L_SNDRUN,(%a0)
-    ZWAIT   snd_dead
+    move.w  #0x00ff,(%a1)               /* $8000 = FF: idle, no command */
 /* AA = start. The Z80 then adds up its whole ROM (~0.4 s); a non-zero sum
  * makes it write 00 to $8000 and stop for good (the game then hangs). */
     lea     SHR_BASE,%a1
@@ -936,9 +953,13 @@ fp:
  * scope trigger. The two read-backs are shown live. B2 stops.
  * Register-only (no stack, no work RAM), so it also works when work RAM is
  * the thing that failed. D5 = target index (0 work, 1 sprite, 2 palette,
- * 3 Z80 shared RAM; the Z80 is held in reset while the menu runs). */
+ * 3 Z80 shared RAM; the Z80 is restarted and left waiting for its start
+ * signal, because it has to run to hand the 68000 its bus). */
 menu:
-    move.b  #L_SNDRST0,(%a0)            /* Z80 off the shared RAM while looping */
+    move.b  #L_SNDRST0,(%a0)            /* restart the Z80: after reset it */
+    DELAY   0x1000                      /* writes $8000/$8001 once, then only */
+    move.b  #L_SNDRUN,(%a0)             /* reads $8001 (waits for AA) - and it */
+                                        /* must run to grant the bus at $7A000 */
     moveq   #0,%d5
 menu_show:
     PRINTSTR m_title, L_M0
@@ -1050,12 +1071,13 @@ s_fail:    .asciz "FAIL"
 s_txv:     .asciz "TEXT VRAM"
 s_fgv:     .asciz "FG VRAM"
 s_bgv:     .asciz "BG VRAM"
-shrok:     .asciz "SHARED RAM  PASS"
-shrbad:    .asciz "SHARED RAM  FAIL"
+shrok:     .asciz "SHARED RAM  PASS        "
+shrbad:    .asciz "SHARED RAM  FAIL        "
 sndok:     .asciz "SOUND CPU   OK"
 snddead:   .asciz "SOUND CPU   NOT RUNNING"
 sndnorep:  .asciz "SOUND CPU   NO REPLY CMD"
 sndsum:    .asciz "SOUND CPU   ROM SUM BAD"
+shrwait:   .asciz "SHARED RAM  WAIT Z80 BUS"
 s_sdat:    .asciz "SOUND ROM"
 t_tcw:     .asciz "TC WORLD"
 t_tcu:     .asciz "TC USA"
