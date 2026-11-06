@@ -63,6 +63,24 @@ m68k-elf-objcopy -O binary build/fault.elf build/fault.bin
 ```
 It must land in the FAIL burst pattern (it does).
 
+## Important: the diagnostic keeps the DSP OFF
+The game enables the TMS320C10 DSP at boot (control latch `$7800D` bit Q6 = 1), which
+hands the DSP the 68000 bus. On a board with a dead/absent/non-responding DSP — common on
+bootlegs — enabling it **stalls the 68000**, giving a black screen with only a brief burst
+of activity at power-up. This diagnostic deliberately keeps the DSP **disabled** (Q6 = 0)
+and held in reset, so the 68000 never hands off the bus. If a board runs this diagnostic
+but dies on the real game, suspect the **DSP subsystem**.
+
+## Dead-board bring-up order
+1. **Heartbeat ROM** (`build/twincobr_hb_7j.bin` / `_7h.bin`, `make hb`): toggles the
+   `$7800D` LS259 flip pin (Q3) forever, touching nothing but ROM + that latch.
+   - Pin toggles ~1-2 Hz  -> the 68000 runs, fetches ROM, and drives the latch. Good.
+   - No toggle at all      -> CPU not running: 28 MHz clock + divisions, `/RESET`,
+     program-ROM fetch at `$000000`, or `/DTACK` for the ROM/latch.
+2. **Full diagnostic** (`build/twincobr_diag_7j.bin` / `_7h.bin`): with the CPU proven
+   alive, this brings up the screen and tests work RAM. Colour/text result, or the
+   heartbeat-pin fallback, tells you what failed next.
+
 ## Build
 Needs GNU binutils for `m68k-elf` (`brew install m68k-elf-binutils`), plus `python3`.
 

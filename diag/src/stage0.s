@@ -36,7 +36,7 @@
     .equ L_FLIP1,   0x07         /* Q3=1  HEARTBEAT pin HIGH                     */
     .equ L_BGBANK0, 0x08         /* Q4=0  background RAM bank 0                  */
     .equ L_FGBANK0, 0x0a         /* Q5=0  foreground ROM bank 0                 */
-    .equ L_DSPINT0, 0x0d         /* Q6=1  inhibit DSP interrupt line            */
+    .equ L_DSP_OFF, 0x0c         /* Q6=0  DSP DISABLED (do not hand it the 68K bus) */
     .equ L_SCRNOFF, 0x0e         /* Q7=0  video off                             */
     .equ L_SCRNON,  0x0f         /* Q7=1  video on                              */
 
@@ -62,7 +62,7 @@ _start:
     /* Force a known, safe state — no RAM touched. */
     move.b  #L_IRQOFF,(%a0)      /* IRQ off           */
     move.b  #L_DSPRST0,(%a0)     /* DSP in reset      */
-    move.b  #L_DSPINT0,(%a0)     /* DSP INT inhibited */
+    move.b  #L_DSP_OFF,(%a0)     /* keep the DSP off the bus */
     move.b  #L_SNDRST0,(%a0)     /* sound Z80 in reset*/
     move.b  #L_BGBANK0,(%a0)     /* bg bank 0         */
     move.b  #L_FGBANK0,(%a0)     /* fg bank 0         */

@@ -17,14 +17,30 @@ ROM_SIZE := 0x20000          # two 27512 halves
 EVEN := $(BUILD)/twincobr_diag_7j.bin   # even bytes (D8-D15)
 ODD  := $(BUILD)/twincobr_diag_7h.bin   # odd  bytes (D0-D7)
 
-.PHONY: all clean dump
-all: $(EVEN) $(ODD)
+# Heartbeat-only ROM (stage 0): toggles the LS259 flip pin forever, touches
+# nothing but ROM + the control latch. Use it to prove the 68000 is alive on a
+# dead board before the full diagnostic.
+HB_EVEN := $(BUILD)/twincobr_hb_7j.bin
+HB_ODD  := $(BUILD)/twincobr_hb_7h.bin
+
+.PHONY: all hb clean dump
+all: $(EVEN) $(ODD) hb
+hb: $(HB_EVEN) $(HB_ODD)
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/stage0.o: $(SRC) | $(BUILD)
 	$(AS) $(ASFLAGS) $< -o $@
+
+$(BUILD)/hb.o: src/stage0.s | $(BUILD)
+	$(AS) $(ASFLAGS) $< -o $@
+$(BUILD)/hb.elf: $(BUILD)/hb.o diag.ld
+	$(LD) $(LDFLAGS) $< -o $@
+$(BUILD)/hb.bin: $(BUILD)/hb.elf
+	$(OBJCOPY) -O binary $< $@
+$(HB_EVEN) $(HB_ODD): $(BUILD)/hb.bin tools/split.py
+	$(PYTHON) tools/split.py $(BUILD)/hb.bin $(HB_EVEN) $(HB_ODD) $(ROM_SIZE)
 
 $(BUILD)/diag.elf: $(BUILD)/stage0.o diag.ld
 	$(LD) $(LDFLAGS) $< -o $@

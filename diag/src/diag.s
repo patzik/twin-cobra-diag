@@ -43,7 +43,10 @@
     .equ L_FLIP1,   0x07
     .equ L_BGBANK0, 0x08
     .equ L_FGBANK0, 0x0a
-    .equ L_DSPINT0, 0x0d
+    .equ L_DSP_OFF, 0x0c                /* Q6=0: DSP DISABLED. The game sets Q6=1 to
+                                         * enable the DSP, which hands it the 68000 bus;
+                                         * a dead/absent DSP then stalls the 68000. The
+                                         * diagnostic does not use the DSP, so keep it off. */
     .equ L_SCRNOFF, 0x0e
     .equ L_SCRNON,  0x0f
 
@@ -147,7 +150,7 @@ _start:
     lea     LATCH,%a0
     move.b  #L_IRQOFF,(%a0)
     move.b  #L_DSPRST0,(%a0)
-    move.b  #L_DSPINT0,(%a0)
+    move.b  #L_DSP_OFF,(%a0)            /* keep the DSP off the bus */
     move.b  #L_SNDRST0,(%a0)
     move.b  #L_BGBANK0,(%a0)
     move.b  #L_FGBANK0,(%a0)
