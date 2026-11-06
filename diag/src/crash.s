@@ -21,6 +21,7 @@
  *     ACCESS 012345  SSW 0015      (bus / address error only)
  *     D0 xxxxxxxx  A0 xxxxxxxx    ... D7 / A7 (A7 = stack pointer)
  *     CODE xxxx xxxx xxxx xxxx     (the 4 words at PC)
+ *     STACK ABOVE THE FRAME        (12 longs: saved registers, return addresses)
  *
  * Saved state lives at the top of work RAM ($33F00-$33F5F).
  * ============================================================================ */
@@ -243,12 +244,46 @@ code_loop:
     dbra    %d2,code_loop
 no_code:
 
+/* stack dump: 12 longs from just above the exception frame (what the
+ * crashed code had on its stack: saved registers, return addresses), 3 per line.
+ * Only if A7 was sane. */
+    move.l  SAVE_SP,%d0
+    btst    #0,%d0
+    jne     no_stack
+    cmp.l   #0x030000,%d0
+    jcs     no_stack
+    cmp.l   #0x033ec0,%d0
+    jhi     no_stack
+    S       s_stack, (ORG - 17)
+    movea.l SAVE_SP,%a5
+    lea     6(%a5),%a5                  /* skip the frame (SR + PC) */
+    cmpi.w  #3,VEC1
+    jhi     stk_go
+    lea     8(%a5),%a5                  /* bus/address error frame is 14 bytes */
+stk_go:
+    move.w  #(ORG - 18),%d6
+    moveq   #3,%d2                      /* 4 lines */
+stk_line:
+    move.w  %d6,%d4
+    moveq   #2,%d0                      /* 3 longs per line */
+stk_long:
+    move.l  (%a5)+,%d5
+    moveq   #8,%d3
+    move.w  %d0,-(%sp)
+    bsr     phex
+    move.w  (%sp)+,%d0
+    add.w   #CHARSTEP,%d4               /* one blank between longs */
+    dbra    %d0,stk_long
+    subq.w  #1,%d6
+    dbra    %d2,stk_line
+no_stack:
+
     tst.w   NESTED
     jeq     hold
-    S       s_nest, (ORG - 17)
+    S       s_nest, (ORG - 23)
     moveq   #0,%d5
     move.w  NESTED,%d5
-    H       4, (ORG - 17 + 20*CHARSTEP)
+    H       4, (ORG - 23 + 20*CHARSTEP)
     jra     hold
 
 /* print the 0-terminated string at A2 from offset D4; D4 ends after it.
@@ -305,6 +340,7 @@ s_sr:   .asciz "SR"
 s_acc:  .asciz "ACCESS"
 s_ssw:  .asciz "SSW"
 s_code: .asciz "CODE"
+s_stack: .asciz "STACK ABOVE THE FRAME"
 s_nest: .asciz "EXCEPTIONS AFTER IT"
 s_d:    .asciz "D"
 s_a:    .asciz "A"
