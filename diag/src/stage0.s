@@ -18,8 +18,9 @@
  *     first instruction, independent of RAM/video.
  *
  * What it does: sets a known, safe hardware state (DSP + sound Z80 held in
- * reset, IRQ off, screen off) and then toggles ONE LS259 latch output — the
- * flip bit (Q3) — as a steady square wave. A pulse on that pin = "the 68000
+ * reset, IRQ off, screen off) and then toggles ONE LS259 latch output — Q2,
+ * the VBLANK-IRQ enable (LS259 pin 6), masked in the CPU so it has no visible
+ * effect — as a steady square wave. A pulse on that pin = "the 68000
  * is alive and executing from ROM," which is exactly the thing a black screen
  * cannot tell you.
  * ============================================================================ */
@@ -32,8 +33,10 @@
     .equ L_IRQOFF,  0x04         /* Q2=0  68000 IRQ (VBLANK) disabled           */
     .equ L_DSPRST0, 0x00         /* Q0=0  hold TMS320C10 DSP in reset           */
     .equ L_SNDRST0, 0x02         /* Q1=0  hold sound Z80 in reset               */
-    .equ L_FLIP0,   0x06         /* Q3=0  HEARTBEAT pin LOW                      */
-    .equ L_FLIP1,   0x07         /* Q3=1  HEARTBEAT pin HIGH                     */
+    .equ L_FLIP0,   0x06         /* Q3=0  flip screen off                       */
+    .equ L_FLIP1,   0x07         /* Q3=1  flip screen on                        */
+    .equ L_HB0,     0x04                /* heartbeat LOW : Q2=0 (VBLANK IRQ enable off) */
+    .equ L_HB1,     0x05                /* heartbeat HIGH: Q2=1 (masked by SR, invisible) */
     .equ L_BGBANK0, 0x08         /* Q4=0  background RAM bank 0                  */
     .equ L_FGBANK0, 0x0a         /* Q5=0  foreground ROM bank 0                 */
     .equ L_DSP_OFF, 0x0c         /* Q6=0  DSP DISABLED (do not hand it the 68K bus) */
@@ -66,15 +69,16 @@ _start:
     move.b  #L_SNDRST0,(%a0)     /* sound Z80 in reset*/
     move.b  #L_BGBANK0,(%a0)     /* bg bank 0         */
     move.b  #L_FGBANK0,(%a0)     /* fg bank 0         */
+    move.b  #L_FLIP0,(%a0)              /* flip screen off */
     move.b  #L_SCRNOFF,(%a0)     /* video off         */
 
-    /* ---- heartbeat: steady square wave on the flip (Q3) latch pin ---- */
+    /* ---- heartbeat: steady square wave on latch Q2 (LS259 pin 6) ---- */
 hb_loop:
-    move.b  #L_FLIP1,(%a0)       /* pin HIGH */
+    move.b  #L_HB1,(%a0)       /* pin HIGH */
     move.l  #HB_DELAY,%d0
 1:  subq.l  #1,%d0
     bne.s   1b
-    move.b  #L_FLIP0,(%a0)       /* pin LOW  */
+    move.b  #L_HB0,(%a0)       /* pin LOW  */
     move.l  #HB_DELAY,%d0
 2:  subq.l  #1,%d0
     bne.s   2b

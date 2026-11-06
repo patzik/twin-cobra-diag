@@ -41,6 +41,8 @@
     .equ L_SNDRST0, 0x02
     .equ L_FLIP0,   0x06
     .equ L_FLIP1,   0x07
+    .equ L_HB0,     0x04                /* heartbeat LOW : Q2=0 (VBLANK IRQ enable off) */
+    .equ L_HB1,     0x05                /* heartbeat HIGH: Q2=1 (masked by SR, invisible) */
     .equ L_BGBANK0, 0x08
     .equ L_FGBANK0, 0x0a
     .equ L_DSP_OFF, 0x0c                /* Q6=0: DSP DISABLED. The game sets Q6=1 to
@@ -154,6 +156,7 @@ _start:
     move.b  #L_SNDRST0,(%a0)
     move.b  #L_BGBANK0,(%a0)
     move.b  #L_FGBANK0,(%a0)
+    move.b  #L_FLIP0,(%a0)              /* flip screen off */
     move.b  #L_SCRNOFF,(%a0)
 
 /* ---- CRTC (R0-R9, values measured from the game ROM) ---- */
@@ -270,18 +273,18 @@ ram_fail:
 
 /* ===================== liveness on the heartbeat pin ===================== */
 pass_hold:
-    move.b  #L_FLIP1,(%a0)
+    move.b  #L_HB1,(%a0)
     DELAY   HB_SLOW
-    move.b  #L_FLIP0,(%a0)
+    move.b  #L_HB0,(%a0)
     DELAY   HB_SLOW
     jra     pass_hold
 
 fail_hold:
     moveq   #3,%d4
 fp:
-    move.b  #L_FLIP1,(%a0)
+    move.b  #L_HB1,(%a0)
     DELAY   HB_FAST
-    move.b  #L_FLIP0,(%a0)
+    move.b  #L_HB0,(%a0)
     DELAY   HB_FAST
     dbra    %d4,fp
     DELAY   HB_SLOW

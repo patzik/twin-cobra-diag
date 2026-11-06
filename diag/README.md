@@ -38,7 +38,7 @@ original minimal skeleton for reference.
 
 Later stages (sprite/palette RAM, video bring-up, inputs, DSP, …) per [../SPEC.md](../SPEC.md).
 
-## Heartbeat / result codes (mainlatch LS259 flip pin, Q3 of $7800D)
+## Heartbeat / result codes (mainlatch LS259 Q2, pin 6, of $7800D)
 - **Nothing toggling** → the 68000 is not executing: check 28 MHz clock + divisions,
   `/RESET`, program-ROM fetch at `$000000`, `/DTACK`.
 - **Slow steady square wave** → all tests so far PASSED.
@@ -73,7 +73,7 @@ but dies on the real game, suspect the **DSP subsystem**.
 
 ## Dead-board bring-up order
 1. **Heartbeat ROM** (`build/twincobr_hb_7j.bin` / `_7h.bin`, `make hb`): toggles the
-   `$7800D` LS259 flip pin (Q3) forever, touching nothing but ROM + that latch.
+   `$7800D` LS259 Q2 output (pin 6) forever, touching nothing but ROM + that latch.
    - Pin toggles ~1-2 Hz  -> the 68000 runs, fetches ROM, and drives the latch. Good.
    - No toggle at all      -> CPU not running: 28 MHz clock + divisions, `/RESET`,
      program-ROM fetch at `$000000`, or `/DTACK` for the ROM/latch.
@@ -102,18 +102,27 @@ ROM pair:
 Leave the other board ROMs in place. The diagnostic lives entirely in the first
 program-ROM pair; the second pair (`.8j`/`.8h`) is not used.
 
+**Bootleg boards: check which sockets you use.** Bootlegs label and lay out the ROMs
+differently from the original. The diagnostic must go in the two **27512 (64 KB)
+program sockets** — the pair that holds the reset vector at `$000000` (on the original,
+`b30_01.7j` / `b30_03.7h`). Many bootlegs also carry two **27256** program ROMs (the
+original's `.8j`/`.8h` code at `$020000`); putting the diag there gives a board that
+does one brief burst of bus activity and then hangs. Confirmed on a bootleg with
+TMM24512 mask ROMs in the 512 positions: a 27C512 drops straight in.
+
 ## Stage 0 — how to read it
 On power-up the ROM sets a safe state (DSP and sound Z80 held in reset, IRQ off,
-screen off) and then toggles **one LS259 latch output — the flip bit, Q3** — as a
-steady square wave, using only CPU registers (no RAM, no stack, no DSP, no video).
+screen off) and then toggles **one LS259 latch output — Q2, the VBLANK-interrupt
+enable** — as a steady square wave, using only CPU registers (no RAM, no stack, no DSP,
+no video). Interrupts are masked in the CPU, so this has no visible effect. (Earlier
+builds used Q3, the flip-screen bit, which made a working screen flip every second.)
 
-- Put a scope / logic probe on the mainlatch LS259 (the `$7800D` latch) **Q3 output
-  pin**, or a point driven by it, and reset the board.
+- Put a scope / logic probe on the mainlatch LS259 (the `$7800D` latch) **Q2 output,
+  pin 6**, and reset the board. There are two LS259s; only the mainlatch toggles.
 - A steady ~square wave there = the 68000 is alive, reached the ROM, and is
   executing. This is the one thing a black screen cannot tell you.
 - No toggle at all = the CPU is not running: check the 28 MHz clock and its
   divisions, `/RESET`, that it can fetch the program ROM at `$000000`, and `/DTACK`.
 
-(The exact pin will be pinned to a convenient board test point against the ktiger
-schematic in [../research/schematics/](../research/schematics/) before the first
-burn.)
+74LS259 pinout for reference: Q0-Q3 = pins 4-7, Q4-Q7 = pins 9-12, D = 13, /LE = 14,
+/CLR = 15, GND = 8, VCC = 16.
