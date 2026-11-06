@@ -220,11 +220,15 @@ ACCESS 020199  SSW 33F6            bus / address error only: address it tried, R
 D0 00000000  A0 000317FE           all registers (A7 = stack pointer)
 ...
 CODE 4848 4848 4848 4848           the 4 words at PC
+STACK ABOVE THE FRAME              12 longs the crashed code had on its stack:
+00020250 000320F4 ...                saved registers and return addresses (its callers)
 ```
+
+Lines are double-spaced so they stay readable on a monitor whose picture is squeezed.
 
 ![crash catcher](doc/crash_catcher.png)
 
-(Forced in MAME: a jump to an odd address, and a jump into the game's `$4848` trap.) The
+(Forced in MAME: a jump to an odd address.) The
 handler also clears sprite RAM so the game's sprites don't cover the text, and then blinks
 the diag's fail pattern on LS259 pin 6.
 

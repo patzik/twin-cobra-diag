@@ -41,7 +41,9 @@
     .equ SAFE_SP,   0x033e00
     .equ CR_MAGIC,  0x43525348             /* 'CRSH' */
 
-    .equ ORG,       0x0066                 /* same text layout as the diag */
+    .equ ORG,       0x0066                 /* same text layout as the diag, but every
+                                            * line double-spaced so a squeezed monitor
+                                            * picture can't make rows overlap */
 
     .text
 /* ---- one 12-byte stub per vector 2-63; mkcrash.py relies on the layout ---- */
@@ -165,34 +167,34 @@ vn_print:
     bsr     pstr
 
 /* PC and SR */
-    S       s_pc, (ORG - 3)
+    S       s_pc, (ORG - 4)
     move.l  F_PC,%d5
-    H       6, (ORG - 3 + 3*CHARSTEP)
-    S       s_sr, (ORG - 3 + 11*CHARSTEP)
+    H       6, (ORG - 4 + 3*CHARSTEP)
+    S       s_sr, (ORG - 4 + 11*CHARSTEP)
     moveq   #0,%d5
     move.w  F_SR,%d5
-    H       4, (ORG - 3 + 14*CHARSTEP)
-    S       s_vec, (ORG - 3 + 20*CHARSTEP)
+    H       4, (ORG - 4 + 14*CHARSTEP)
+    S       s_vec, (ORG - 4 + 20*CHARSTEP)
     moveq   #0,%d5
     move.w  VEC1,%d5
-    H       2, (ORG - 3 + 24*CHARSTEP)
+    H       2, (ORG - 4 + 24*CHARSTEP)
 
 /* bus / address error extras */
     cmpi.w  #3,VEC1
     jhi     no_acc
-    S       s_acc, (ORG - 4)
+    S       s_acc, (ORG - 6)
     move.l  F_ACC,%d5
-    H       6, (ORG - 4 + 7*CHARSTEP)
-    S       s_ssw, (ORG - 4 + 15*CHARSTEP)
+    H       6, (ORG - 6 + 7*CHARSTEP)
+    S       s_ssw, (ORG - 6 + 15*CHARSTEP)
     moveq   #0,%d5
     move.w  F_SSW,%d5
-    H       4, (ORG - 4 + 19*CHARSTEP)
+    H       4, (ORG - 6 + 19*CHARSTEP)
 no_acc:
 
 /* registers: D0-D7 left column, A0-A7 right column. SAVE holds D0-D7 then
  * A0-A6, and SAVE_SP (A7) follows A6 directly. */
     lea     SAVE,%a5
-    move.w  #(ORG - 6),%d6              /* line */
+    move.w  #(ORG - 8),%d6              /* line */
     moveq   #0,%d2                      /* register number */
 reg_loop:
     lea     s_d,%a2
@@ -219,7 +221,7 @@ reg_loop:
     add.w   #16*CHARSTEP,%d4
     bsr     phex
     addq.l  #4,%a5
-    subq.w  #1,%d6
+    subq.w  #2,%d6                      /* double-spaced lines */
     addq.w  #1,%d2
     cmp.w   #8,%d2
     jne     reg_loop
@@ -230,9 +232,9 @@ reg_loop:
     jne     no_code
     cmp.l   #0x02fff8,%d0
     jhi     no_code
-    S       s_code, (ORG - 15)
+    S       s_code, (ORG - 24)
     movea.l F_PC,%a5
-    move.w  #(ORG - 15 + 5*CHARSTEP),%d6
+    move.w  #(ORG - 24 + 5*CHARSTEP),%d6
     moveq   #3,%d2
 code_loop:
     moveq   #0,%d5
@@ -254,14 +256,14 @@ no_code:
     jcs     no_stack
     cmp.l   #0x033ec0,%d0
     jhi     no_stack
-    S       s_stack, (ORG - 17)
+    S       s_stack, (ORG - 26)
     movea.l SAVE_SP,%a5
     lea     6(%a5),%a5                  /* skip the frame (SR + PC) */
     cmpi.w  #3,VEC1
     jhi     stk_go
     lea     8(%a5),%a5                  /* bus/address error frame is 14 bytes */
 stk_go:
-    move.w  #(ORG - 18),%d6
+    move.w  #(ORG - 28),%d6
     moveq   #3,%d2                      /* 4 lines */
 stk_line:
     move.w  %d6,%d4
@@ -274,16 +276,16 @@ stk_long:
     move.w  (%sp)+,%d0
     add.w   #CHARSTEP,%d4               /* one blank between longs */
     dbra    %d0,stk_long
-    subq.w  #1,%d6
+    subq.w  #2,%d6
     dbra    %d2,stk_line
 no_stack:
 
     tst.w   NESTED
     jeq     hold
-    S       s_nest, (ORG - 23)
+    S       s_nest, (ORG - 36)
     moveq   #0,%d5
     move.w  NESTED,%d5
-    H       4, (ORG - 23 + 20*CHARSTEP)
+    H       4, (ORG - 36 + 20*CHARSTEP)
     jra     hold
 
 /* print the 0-terminated string at A2 from offset D4; D4 ends after it.
