@@ -26,6 +26,7 @@ not the 27256 program sockets — see `diag/README.md`.
 - Stage 0: RAM-less CPU-alive heartbeat on the `$7800D` latch (LS259 Q2, pin 6).
 - Stage 2: HD6845 CRTC init + screen on + full-screen colour status.
 - Stage 1: work/DSP-shared RAM test `$30000-$33FFF`.
+- Stage 3: CRC32 of the two 27256 program ROMs (named against known MAME sets), sprite RAM, palette RAM.
 
 On-screen: white text on black — `TWIN COBRA DIAG`, then `WORK RAM  PASS`, or
 `WORK RAM  FAIL` with the failing address / expected / read-back in hex.
