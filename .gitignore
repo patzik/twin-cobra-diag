@@ -14,3 +14,6 @@
 diag/build/*.o
 diag/build/*.elf
 diag/build/fault*
+
+# diag/build/twincobr_crash_* contain GAME code. They are committed only while
+# this repo is private; ignore and remove them before making it public.

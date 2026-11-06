@@ -83,7 +83,7 @@ When the tests finish (pass or fail, including a work-RAM failure) the screen sh
 ```
 LOOP TEST  STICK SELECTS
 TARGET SPRITE RAM  040000          P1 up/down: WORK RAM / SPRITE RAM / PALETTE RAM
-B1 START  B2 STOP
+B1 START  B2 STOP  IN 00            IN = live P1 inputs (hex)
 
 W0000 R 0000  WFFFF R FFFF         live read-backs while looping
 ```
@@ -94,7 +94,9 @@ with a scope from the 68000 through any 74LS245 buffers to the RAM pins and see 
 it stops toggling or gets stuck. The heartbeat pin (mainlatch LS259 **pin 6**) goes high
 at the start of each cycle, which makes a clean **scope trigger**. The two values read
 back are shown live, so a stuck or floating bit is visible on screen as well (a good
-board shows `0000` and `FFFF`). B2 stops the loop and returns to the menu.
+board shows `0000` and `FFFF`). B2 (or B1) stops the loop and returns to the menu.
+`IN xx` shows the P1 input byte live, in the menu and while looping: up `01`, down `02`,
+B1 `10`, B2 `20`. If a button does nothing, check here whether the board sees it at all.
 
 The menu and loop use no stack or work RAM, so they still work on a board whose work
 RAM failed. Inputs: P1 at `$78004`, active high (bit 0 up, 1 down, 4 B1, 5 B2).
@@ -197,6 +199,52 @@ bootleg schematic does (LS259 K17 pin 5 → Z80 `/RESET`). MAME also doesn't mod
 `/BUSRQ`-`/BUSACK` handshake. The stage-5 tests in MAME were run with a Lua script that adds
 the reset wiring and flags any 68000 access to shared RAM while the Z80 is in reset (a hang
 on real hardware).
+
+## Crash catcher (when the diag passes but the game still shows a black screen)
+The game points every 68000 exception vector at `$100`-`$108`, which hold `$4848` - an
+illegal opcode on a 68000. So **any** fault (bus error, address error, illegal instruction)
+becomes an endless exception loop with the screen still off: a black screen, `/AS` pulsing
+and **every address line toggling** as the stack runs down through memory.
+
+`make crash` builds a copy of **the game's own** 27512 pair with a small handler
+(`src/crash.s`) added in unused ROM space (`$1A400`, FF-filled in the World set), the
+exception vectors 2-63 pointed at it (IRQ4 = the game's VBLANK handler and IRQ7 are left
+alone), and 4 spare bytes per chip adjusted so the game's own ROM checksum (`$25E54`) still
+passes. The game runs exactly as before; if it crashes, the screen comes on with:
+
+```
+GAME CRASHED
+ADDRESS ERROR                      exception type
+PC 020199  SR 2004  VEC 03         where it happened
+ACCESS 020199  SSW 33F6            bus / address error only: address it tried, R/W + FC
+D0 00000000  A0 000317FE           all registers (A7 = stack pointer)
+...
+CODE 4848 4848 4848 4848           the 4 words at PC
+```
+
+![crash catcher](doc/crash_catcher.png)
+
+(Forced in MAME: a jump to an odd address, and a jump into the game's `$4848` trap.) The
+handler also clears sprite RAM so the game's sprites don't cover the text, and then blinks
+the diag's fail pattern on LS259 pin 6.
+
+**Build:** the images contain game code. They are committed in `build/` only because this
+repository is private; **remove them before making it public.** To rebuild from your own ROMs:
+
+```
+make crash ROMS=<folder with b30_01.7j and b30_03.7h>
+```
+
+That writes `build/twincobr_crash_7j.bin` (even, socket `b30_01.7j`) and
+`build/twincobr_crash_7h.bin` (odd, `b30_03.7h`). Burn them on two 27C512s in place of the
+game's 27512 pair; keep the game's 27256s and all other ROMs. Only the Twin Cobra World set
+is accepted (the tool checks the CRCs, the free space and the vectors first).
+
+**Reading the result:** look up the PC in a disassembly of the game. A PC in the ROM checks
+(`$25B40`-`$25E76`) or near a ROM-checksum failure points at ROM/socket trouble; an
+`ACCESS` address points at the device the CPU couldn't read or write; a PC that isn't in
+ROM at all (or `$000100`-`$000108`) means the CPU jumped somewhere wild - often a bad
+program ROM byte or data line.
 
 ## Fault-injection test (how the FAIL path was verified)
 Build a variant whose RAM test points at ROM so writes can't stick:

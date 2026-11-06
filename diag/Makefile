@@ -7,7 +7,7 @@ OBJCOPY := m68k-elf-objcopy
 OBJDUMP := m68k-elf-objdump
 PYTHON  := python3
 
-ASFLAGS := -m68000
+ASFLAGS := -m68000 -I src
 LDFLAGS := -T diag.ld
 
 BUILD   := build
@@ -27,7 +27,7 @@ HB_ODD  := $(BUILD)/twincobr_hb_7h.bin
 SPIN_EVEN := $(BUILD)/twincobr_spin_7j.bin
 SPIN_ODD  := $(BUILD)/twincobr_spin_7h.bin
 
-.PHONY: all hb spin clean dump
+.PHONY: all hb spin clean dump crash
 all: $(EVEN) $(ODD) hb spin
 hb: $(HB_EVEN) $(HB_ODD)
 spin: $(SPIN_EVEN) $(SPIN_ODD)
@@ -35,7 +35,7 @@ spin: $(SPIN_EVEN) $(SPIN_ODD)
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/stage0.o: $(SRC) | $(BUILD)
+$(BUILD)/stage0.o: $(SRC) src/video.inc | $(BUILD)
 	$(AS) $(ASFLAGS) $< -o $@
 
 $(BUILD)/hb.o: src/stage0.s | $(BUILD)
@@ -64,6 +64,21 @@ $(BUILD)/diag.bin: $(BUILD)/diag.elf
 
 $(EVEN) $(ODD): $(BUILD)/diag.bin tools/split.py
 	$(PYTHON) tools/split.py $(BUILD)/diag.bin $(EVEN) $(ODD) $(ROM_SIZE)
+
+# Crash catcher: the GAME's own 27512 pair with an exception handler added
+# (src/crash.s). Built from your own ROM files; the output contains game code,
+# so it is git-ignored. make crash ROMS=<dir with b30_01.7j and b30_03.7h>
+ROMS ?= ../research/roms_extracted
+CRASH_EVEN := $(BUILD)/twincobr_crash_7j.bin
+CRASH_ODD  := $(BUILD)/twincobr_crash_7h.bin
+crash: $(BUILD)/crash.bin tools/mkcrash.py
+	$(PYTHON) tools/mkcrash.py $(ROMS) $(BUILD)/crash.bin $(CRASH_EVEN) $(CRASH_ODD)
+$(BUILD)/crash.o: src/crash.s src/video.inc | $(BUILD)
+	$(AS) $(ASFLAGS) $< -o $@
+$(BUILD)/crash.elf: $(BUILD)/crash.o
+	$(LD) -e stubs -Ttext 0x1a400 $< -o $@
+$(BUILD)/crash.bin: $(BUILD)/crash.elf
+	$(OBJCOPY) -O binary $< $@
 
 # Disassemble for inspection
 dump: $(BUILD)/diag.elf
