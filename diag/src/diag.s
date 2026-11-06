@@ -469,6 +469,16 @@ if_end\@:
     jne     \target
 .endm
 
+/* HB_SLOW worth of delay, watching P1 button 1 all the while (16 checks).
+ * Uses A2,D0,D3,D7. */
+.macro DLYCHK target
+    moveq   #15,%d3
+dc\@:
+    DELAY   (HB_SLOW/16)
+    CHKB1   \target
+    dbra    %d3,dc\@
+.endm
+
 /* wait until P1 up/down/B1/B2 are all released. Uses A2,D0,D7. */
 .macro WAITREL
 wr\@:
@@ -562,6 +572,8 @@ wr\@:
     .global _start
 _start:
     move.w  #0x2700,%sr
+    suba.l  %a1,%a1
+    move.l  %a1,%usp                    /* no main-menu marker yet */
     lea     LATCH,%a0
     move.b  #L_IRQOFF,(%a0)
     move.b  #L_DSPRST0,(%a0)
@@ -649,7 +661,7 @@ ram_fail:
     PRINTHEX %a5, 6, OFF_ADDR            /* A <addr> */
     PRINTHEX %d5, 4, OFF_EXP             /* E <exp>  */
     PRINTHEX %d6, 4, OFF_GOT             /* G <got>  */
-    jra     fail_hold
+    jra     wram_hold
 
 /* ====== STAGE 3: program ROM CRCs, sprite RAM, palette RAM ======
  * Runs only after work RAM passed, so a flag word in work RAM is safe. Every
@@ -957,11 +969,9 @@ pass_hold:
     PRINTSTR m_hint, L_HINT
 pass_loop:
     move.b  #L_HB1,(%a0)
-    DELAY   HB_SLOW
-    CHKB1   menu
+    DLYCHK  mm_enter
     move.b  #L_HB0,(%a0)
-    DELAY   HB_SLOW
-    CHKB1   menu
+    DLYCHK  mm_enter
     jra     pass_loop
 
 fail_hold:
@@ -974,9 +984,27 @@ fp:
     move.b  #L_HB0,(%a0)
     DELAY   HB_FAST
     dbra    %d4,fp
-    DELAY   HB_SLOW
-    CHKB1   menu
+    DLYCHK  mm_enter
     jra     fail_loop
+
+/* work RAM failed: same blink, but button 1 opens only the register-only RAM
+ * loop menu (the main menu needs work RAM) */
+wram_hold:
+    PRINTSTR m_hint, L_HINT
+wram_loop:
+    moveq   #3,%d4
+wfp:
+    move.b  #L_HB1,(%a0)
+    DELAY   HB_FAST
+    move.b  #L_HB0,(%a0)
+    DELAY   HB_FAST
+    dbra    %d4,wfp
+    DLYCHK  menu
+    jra     wram_loop
+
+mm_enter:
+    move.w  #0,MSEL
+    jra     main_menu
 
 /* ===================== loop-test menu (troubleshooting) =====================
  * Pick a RAM with the P1 stick, B1 starts a tight loop on its first word:
@@ -1017,7 +1045,12 @@ m_poll:
     jne     m_down
     btst    #4,%d0                      /* B1: start */
     jne     loop_go
-    jra     m_poll
+    btst    #5,%d0                      /* B2: back to the main menu, if we came */
+    jeq     m_poll                      /* from there (marker in USP) */
+    move.l  %usp,%a1
+    cmpa.l  #MM_MARK,%a1
+    jne     m_poll
+    jra     main_menu
 m_up:
     subq.w  #1,%d5
     jpl     m_target
@@ -1289,6 +1322,8 @@ irq_other:
     addq.w  #1,IRQCO
     ori.w   #0x0700,(%sp)
     rte
+
+    .include "pages.inc"
 
 /* ============================ data ============================ */
     .even

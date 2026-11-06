@@ -64,7 +64,10 @@ the text report replaced that.
   with it on, no other levels. Verified in MAME (pass, and a forced leaking gate). Added
   after a real board crashed the game because the interrupt got through while off.
 
-Next stages (DSP self-test, inputs) per [../SPEC.md](../SPEC.md).
+- **Main menu** — input/DIP test, colour test, text/FG/BG tile viewers, sprite viewer,
+  scroll test for all three layers, sound test, RAM loop test, rerun. Verified in MAME (`doc/menu_pages.png`, `doc/menu_viewers.png`).
+
+Next: a DSP (TMS320C10) test, per [../SPEC.md](../SPEC.md).
 
 ## Heartbeat / result codes (mainlatch LS259 Q2, pin 6, of $7800D)
 - **Nothing toggling** → the 68000 is not executing: check 28 MHz clock + divisions,
@@ -255,6 +258,100 @@ is accepted (the tool checks the CRCs, the free space and the vectors first).
 `ACCESS` address points at the device the CPU couldn't read or write; a PC that isn't in
 ROM at all (or `$000100`-`$000108`) means the CPU jumped somewhere wild - often a bad
 program ROM byte or data line.
+
+## Main menu (P1 button 1 after the tests)
+When the tests are done and work RAM passed, hold **P1 button 1** to open the main menu
+(modelled on the Shinobi test ROM's menu). Up/down move, B1 opens a page, **B2** goes back
+(on the input test: **B1 and B2 together**, since every button is being tested there). If
+work RAM failed, button 1 opens only the register-only RAM loop menu, because the main menu
+needs the stack.
+
+| Entry | What it does |
+|---|---|
+| RERUN ALL TESTS | Runs every test again from the start |
+| RAM LOOP TEST | The scope loop menu (see above); B2 comes back to the main menu |
+| INPUT AND DIP TEST | P1, P2, coin/start/service/test/tilt and both DIP banks, live |
+| COLOUR TEST | 31 steps each of red, green, blue and white |
+| TEXT / FG / BG TILE VIEWER | 256 tiles of that layer per page, straight from its ROMs |
+| SPRITE VIEWER | 64 sprites per page |
+| SCROLL TEST | Scrolls the text, FG or BG layer over a test pattern |
+| SOUND TEST | Sends a sound code to the Z80 and shows whether it answered |
+
+![menu pages](doc/menu_pages.png)
+![viewers](doc/menu_viewers.png)
+
+**Input test.** Each name lights up yellow while pressed: `UP DN LT RT B1 B2` for P1 and P2;
+`SV TL TS C1 C2 S1 S2` = service, tilt, test, coin 1, coin 2, start 1, start 2. That last group
+is wired to the **sound CPU**, not the 68000: the Z80 copies it to shared RAM, so it only
+works when stage 5 passed. DIP switches are shown as `0`/`1`, switch 1 first.
+
+**Colour test.** Every line is one level (01-1F) of the 5-bit red, green and blue channels and
+white. A bad resistor, buffer or DAC bit shows as a missing step or a repeated pair of lines
+in that bar. It uses the text layer: characters `$7F0`-`$7F6` in the char ROM are solid
+blocks of pens 1-7, and each text colour set gets one level.
+
+**Tile and sprite viewers.** Up/down = one page, left/right = 16 pages (sprites: 8). The
+number on each row is the first tile on it. They start in the **game's own colours**: the
+palette the game loads, captured from MAME (`src/gamepal.inc`). **B1** steps through the
+layer's colour sets (`COLOUR 00`, `01`, ... - text 32, FG and BG 16, sprites 64; tiles don't
+store a colour, the game picks one per tile), and after the last one switches to
+**plane colours** (`PLANES`): each bitplane gets its own colour (text: red, green and blue;
+FG, BG and sprites: red, green, blue and "brighter" for the 4th plane). Game colours make
+the graphics recognisable; plane colours make a dead or wrong ROM, a missing ROM data line
+or a stuck bitplane show as a whole colour missing or stuck across the page. A bad address
+line shows as repeated or swapped tiles in either mode. Compare a page with the same page of
+this diag in MAME (`doc/menu_viewers.png` shows page 0 of each).
+
+To recapture the palette from your own ROM set (needs MAME):
+`PALOUT=<folder> mame twincobr -autoboot_script tools/capture_pal.lua`, then
+`python3 tools/make_gamepal.py <folder> src/gamepal.inc`. Text = 2048 chars
+(8 pages), FG = 8192 tiles (32 pages, the upper 16 through the FG ROM bank bit), BG = 4096
+(16 pages), sprites = 2048 (32 pages). Sprites are placed from MAME's sprite offsets; on a
+real board they may sit a few pixels off.
+
+**Scroll test.** Modelled on the Shinobi test ROM's scroll test. It checks one scroll
+register at a time, so a bad bit can be pinned down.
+
+- **Up/down** chooses the register: `TEXT X`, `TEXT Y`, `FG X`, `FG Y`, `BG X`, `BG Y`. On the
+  rotated monitor the **X** registers move the picture **up/down** and the **Y** registers
+  **left/right**. X has 9 bits (0-511 pixels); Y has 9 for FG and BG (64 tiles high) and 8
+  for text (32 tiles high).
+- **B1** cycles the mode:
+  - **AUTO** - 1 pixel every 2 frames. The ruler must glide smoothly: no pauses, steps or
+    jumps back.
+  - **STEP** - each left/right press moves it exactly 1 pixel (hold to repeat).
+  - **BIT** - left/right pick a bit (yellow in the binary value); it is switched on and off
+    every half second and the line under the value says how far the layer must jump: 1 pixel
+    for bit 0 up to 256 for bit 8.
+- **B2** exits.
+
+The panel shows the register value in hex and in binary with the bit numbers underneath.
+The layer under test shows a **ruler**. On FG and BG it changes only along the tested
+direction: blocks of 8 tiles, each block one of 8 colours (so the pattern repeats only after
+512 pixels), tiles inside a block alternating light and dark, and a grey line at the start
+of every block - X gives horizontal bands that move up/down, Y vertical bands that move
+left/right, and even a 256-pixel jump moves the blocks visibly. On the text layer
+every cell shows its column (X) or row (Y) number in hex, low digit and high digit in
+alternate cells, with every 8th one yellow. When the text layer is tested, FG shows a fixed
+colour ruler behind it as a reference. The panel has to live in the text layer too (it is
+the only layer with a font), so the diag moves it the other way each time the scroll passes
+a whole tile: it stays in place, apart from the fine scroll within a tile (bits 0-2, up to
+7 pixels), which software can't cancel. In BIT mode for bits 3-8 it doesn't move at all.
+
+In BIT mode, step through all bits of each register. A bit where the layer doesn't move,
+or moves the wrong distance, is the faulty one. Typical symptoms in the game: a dead low bit
+(0-2, the fine scroll within a tile) makes a layer move in steps; a dead higher bit makes it
+jump back or forward by a large amount every few steps. On the bootleg the layers' scroll
+counters are the 74LS669s on the daughterboard ("Board C", one section per layer): compare
+the faulty layer's signal with the same signal of a working layer, as in the Shinobi
+repair.
+
+![scroll test](doc/scroll_test.png)
+
+**Sound test.** Up/down change the code by 1, left/right by $10. B1 sends it the way the game
+does (code to the Z80's `$8000`, then wait for `FF`): `OK` means the Z80 took it, `NO REPLY`
+means it didn't (see stage 5). Codes `01`-`25` are the game's sounds and music, with bits
+6-7 selecting the channel group; leaving the page sends `FE`, which stops all sound.
 
 ## Stage 6 — interrupts
 The game keeps the VBLANK interrupt (68000 level 4) **off** during its start-up tests
