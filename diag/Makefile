@@ -23,9 +23,14 @@ ODD  := $(BUILD)/twincobr_diag_7h.bin   # odd  bytes (D0-D7)
 HB_EVEN := $(BUILD)/twincobr_hb_7j.bin
 HB_ODD  := $(BUILD)/twincobr_hb_7h.bin
 
-.PHONY: all hb clean dump
-all: $(EVEN) $(ODD) hb
+# Spin ROM: reads ROM forever, no writes. Isolates read path from write path.
+SPIN_EVEN := $(BUILD)/twincobr_spin_7j.bin
+SPIN_ODD  := $(BUILD)/twincobr_spin_7h.bin
+
+.PHONY: all hb spin clean dump
+all: $(EVEN) $(ODD) hb spin
 hb: $(HB_EVEN) $(HB_ODD)
+spin: $(SPIN_EVEN) $(SPIN_ODD)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -41,6 +46,15 @@ $(BUILD)/hb.bin: $(BUILD)/hb.elf
 	$(OBJCOPY) -O binary $< $@
 $(HB_EVEN) $(HB_ODD): $(BUILD)/hb.bin tools/split.py
 	$(PYTHON) tools/split.py $(BUILD)/hb.bin $(HB_EVEN) $(HB_ODD) $(ROM_SIZE)
+
+$(BUILD)/spin.o: src/spin.s | $(BUILD)
+	$(AS) $(ASFLAGS) $< -o $@
+$(BUILD)/spin.elf: $(BUILD)/spin.o diag.ld
+	$(LD) $(LDFLAGS) $< -o $@
+$(BUILD)/spin.bin: $(BUILD)/spin.elf
+	$(OBJCOPY) -O binary $< $@
+$(SPIN_EVEN) $(SPIN_ODD): $(BUILD)/spin.bin tools/split.py
+	$(PYTHON) tools/split.py $(BUILD)/spin.bin $(SPIN_EVEN) $(SPIN_ODD) $(ROM_SIZE)
 
 $(BUILD)/diag.elf: $(BUILD)/stage0.o diag.ld
 	$(LD) $(LDFLAGS) $< -o $@
