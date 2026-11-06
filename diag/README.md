@@ -36,6 +36,12 @@ ROM LO D7D1E317 TC WORLD           CRC32 of the odd  (D0-D7)  27256 + matched se
 NO VBLANK SIGNAL                   (only if $78009 bit 7 never toggles)
 SPRITE RAM  PASS                   (or FAIL + "A <addr> E <exp> G <got>")
 PALETTE RAM PASS                   (or FAIL + detail line)
+TEXT VRAM   PASS                   stage 4: video RAM behind the offset/data ports
+FG VRAM     PASS
+BG VRAM     PASS                   (a FAIL adds "A <offset> E <exp> G <got>")
+SHARED RAM  PASS                   stage 5: Z80 shared RAM (or FAIL + detail line)
+SOUND CPU   OK                     (or NOT RUNNING / ROM SUM BAD / NO REPLY CMD xx)
+SOUND ROM   80ECFF66 TC WORLD      CRC32 of sound ROM $4000-$6FFF, read through the Z80
 ALL TESTS PASS                     (or SOME TESTS FAILED)
 ```
 
@@ -45,8 +51,12 @@ heartbeat-only ROM, `src/spin.s` the reads-only ROM.
 Earlier builds showed status as a full-screen colour (blue/green/red, `doc/stage2_*.png`);
 the text report replaced that.
 
-Next stages (shared Z80 RAM / sound handshake, DSP self-test, inputs) per
-[../SPEC.md](../SPEC.md).
+- **Stage 4** — text / foreground / background video RAM. Verified in MAME (pass and a
+  forced FG fault).
+- **Stage 5** — Z80 shared RAM, Z80 start-up handshake, sound ROM sum and CRC through the
+  Z80. Verified in MAME (pass, dead Z80, bad shared RAM, no start signal, bad sound ROM).
+
+Next stages (DSP self-test, inputs) per [../SPEC.md](../SPEC.md).
 
 ## Heartbeat / result codes (mainlatch LS259 Q2, pin 6, of $7800D)
 - **Nothing toggling** → the 68000 is not executing: check 28 MHz clock + divisions,
@@ -115,6 +125,51 @@ The loop-test menu follows the same rules: sprite RAM bursts are synced to VBLAN
 screen is blanked during each palette RAM burst, so the picture flickers on that target.
 
 Takes about a second to run.
+
+## Stage 4 — video RAM (text / foreground / background)
+The game tests these three RAMs before it ever turns the screen on, and **if any of them
+fails it never starts the sound CPU and hangs** in the same loop as a dead Z80 (see stage 5).
+They are reached through an offset register plus a data port (text `$70004`/`$7E000`, bg
+`$72004`/`$7E002`, fg `$74004`/`$7E004`; no auto-increment). Each one gets an
+address-uniqueness pass (every word its own offset) and the game's own AAAA / 5555 passes,
+with the screen off as the game does. Sizes: text 2048 words, fg 4096, bg 4096 (bank 0).
+The text test overwrites the on-screen report, so the text layer is copied to work RAM
+first and put back afterwards. The detail line shows the **last** failing layer; its
+`A` value is the word offset inside that layer.
+
+## Stage 5 — sound CPU (Z80)
+**Why it matters:** right after its RAM tests the game asks the Z80 for blocks of the sound
+ROM and waits for an answer with **no timeout** (`$25F4A`: wait for `FF` at `$7A001`).
+A dead Z80, bad sound ROM or bad shared RAM gives a permanent black screen with the
+screen-enable latch (LS259 pin 12) low, and the sound-reset latch (pin 5) high.
+
+1. **Shared RAM** `$7A000-$7AFFF` (2 KiB, 8-bit: the low byte of each word; Z80 `$8000-$87FF`),
+   tested with the Z80 held in reset (latch `0x02`).
+2. **Z80 start-up**, using the protocol from the game and its Z80 code (`$2F7B`):
+   - release the Z80 (latch `0x03`). Its first code must write `FF` to `$8000`; if that never
+     appears: `SOUND CPU NOT RUNNING`. Check its clock (pin 6), `/RESET` (26), `/WAIT` (24),
+     `/HALT` (18), the sound ROM socket and the shared-RAM path.
+   - write `AA` (start). The Z80 adds up its whole ROM; if the sum is not 0 it writes `00` and
+     stops for good: `SOUND CPU ROM SUM BAD` - re-read / replace the sound ROM.
+   - send the game's 12 commands `F0`-`FB`: for each the Z80 copies 1 KiB of its ROM
+     (`$4000 + n*$400`) into shared RAM and answers `FF`. No answer: `NO REPLY CMD xx`.
+3. **Sound ROM CRC32** over those 12 blocks (`$4000-$6FFF`), so the sound ROM is checked
+   through the Z80 itself. `80ECFF66` = `b30_05_ii.4f` (Twin Cobra World). Other sets use a
+   different sound ROM and show `UNKNOWN`, which is **not** counted as a failure.
+
+The loop-test menu has a fourth target, **SHARED RAM** (`$7A000`), and holds the Z80 in reset
+while the menu runs. Only D0-D7 are real there; D8-D15 read back whatever floats.
+
+![pass](doc/stage5_pass.png)
+
+Left to right: good board, dead Z80, bad shared RAM bit, bad FG video RAM bit, Z80 never
+gets the start signal (`doc/stage5_faults.png`):
+
+![faults](doc/stage5_faults.png)
+
+**MAME note:** MAME does not wire latch Q1 to the Z80 reset (the Z80 always runs), but the
+bootleg schematic does (LS259 K17 pin 5 → Z80 `/RESET`). The stage-5 tests in MAME were run
+with a Lua script that adds that wiring.
 
 ## Fault-injection test (how the FAIL path was verified)
 Build a variant whose RAM test points at ROM so writes can't stick:

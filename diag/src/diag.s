@@ -75,9 +75,17 @@
     .equ L_ROML,    (ORG - 6)
     .equ L_SPR,     (ORG - 8)
     .equ L_SPRD,    (ORG - 9)
-    .equ L_PAL,     (ORG - 11)
-    .equ L_PALD,    (ORG - 12)
-    .equ L_END,     (ORG - 14)
+    .equ L_PAL,     (ORG - 10)
+    .equ L_PALD,    (ORG - 11)
+    .equ L_TXV,     (ORG - 12)             /* stage 4: video RAM */
+    .equ L_FGV,     (ORG - 13)
+    .equ L_BGV,     (ORG - 14)
+    .equ L_VRD,     (ORG - 15)             /* detail of the last failing video RAM */
+    .equ L_SHR,     (ORG - 17)             /* stage 5: sound CPU */
+    .equ L_SHRD,    (ORG - 18)
+    .equ L_SND,     (ORG - 19)
+    .equ L_SDAT,    (ORG - 20)
+    .equ L_END,     (ORG - 22)
 
     /* Stage 3 targets (overridable with --defsym for fault-injection tests) */
 .ifndef PROG2
@@ -111,11 +119,44 @@
     .equ P1IN,      0x078004               /* P1 inputs, active high: */
                                            /* bit0 up, 1 down, 2 left, 3 right, 4 B1, 5 B2 */
     .equ MENU_DLY,  0x00002000             /* ~20 ms input poll / debounce delay */
-    .equ L_HINT,    (ORG - 16)
-    .equ L_M0,      (ORG - 18)
-    .equ L_M1,      (ORG - 19)
-    .equ L_M2,      (ORG - 20)
-    .equ L_M3,      (ORG - 22)
+    .equ L_HINT,    (ORG - 24)
+    .equ L_M0,      (ORG - 26)
+    .equ L_M1,      (ORG - 27)
+    .equ L_M2,      (ORG - 28)
+    .equ L_M3,      (ORG - 30)
+
+    /* stage 4: text / foreground / background video RAM, reached through an
+     * offset register + data port (no auto-increment), as the game tests them */
+    .equ FGOFFS,    0x074004
+    .equ FGDATA,    0x07e004
+    .equ BGOFFS,    0x072004
+    .equ BGDATA,    0x07e002
+    .equ TX_WORDS,  2048
+    .equ FG_WORDS,  4096
+    .equ BG_WORDS,  4096                   /* bank 0 (latch Q4 = 0), as the game */
+    .equ TXSAVE,    0x030000               /* work-RAM copy of the text layer */
+    .equ VRBITS,    0x033ff0               /* bit 0/1/2 = text/fg/bg video RAM failed */
+    .equ VRA,       0x033ff2               /* detail of the last failure: offset (long) */
+    .equ VRE,       0x033ff6               /*   expected */
+    .equ VRG,       0x033ff8               /*   got */
+
+    /* stage 5: sound CPU. Shared RAM is 2 KiB, 8-bit on the Z80 side
+     * ($8000-$87FF), the low byte of each 68000 word at $7A000-$7AFFF.
+     * Protocol (from the game, $25c6e/$25f3c, and its Z80 code at $2F7B):
+     *   Z80 out of reset writes FF to its $8000 (68000 $7A001), 00 to $8001;
+     *   68000 writes AA to $7A002 (Z80 $8001) = start; the Z80 then sums its
+     *   whole ROM and, if the sum is not 0, writes 00 to $8000 and stops;
+     *   68000 writes a command F0+n to $7A001; the Z80 copies its ROM
+     *   $4000+n*$400 (1 KiB) to its $8200 (68000 $7A401, every 2nd byte)
+     *   and writes FF to $8000 when done. The game asks for F0-FB. */
+.ifndef SHR_BASE
+    .equ SHR_BASE,  0x07a000
+.endif
+    .equ SHR_WORDS, 2048
+    .equ L_SNDRUN,  0x03                   /* latch Q1 = 1: release the Z80 */
+    .equ Z_TMO,     0x00080000             /* ~3.5 s per wait */
+    .equ Z_SUMDLY,  0x00070000             /* ~1.2 s for the Z80's own ROM sum (~0.4 s) */
+    .equ Z_CRC_TC,  0x80ecff66             /* CRC32 of b30_05_ii.4f $4000-$6FFF */
 
 /* register-only busy delay (uses D7) */
 .macro DELAY n
@@ -279,7 +320,10 @@ ta\@:
     move.w  #\nwords-1,%d0
     moveq   #0,%d2
 tb\@:
-    move.w  %d2,(%a1)+
+    move.w  %d2,%d3                     /* index ^ (index >> 8): still unique, and */
+    lsr.w   #8,%d3                      /* the low byte alone also changes with    */
+    eor.w   %d2,%d3                     /* the high address bits (8-bit RAMs)      */
+    move.w  %d3,(%a1)+
     addq.w  #1,%d2
     dbra    %d0,tb\@
     lea     \base,%a1
@@ -288,6 +332,8 @@ tb\@:
 td\@:
     move.w  (%a1)+,%d1
     move.w  %d2,%d3
+    lsr.w   #8,%d3
+    eor.w   %d2,%d3
     and.w   #\mask,%d1
     and.w   #\mask,%d3
     cmp.w   %d3,%d1
@@ -397,6 +443,88 @@ sy\@:
     .endif
     dbra    %d0,sy\@
     dbra    %d4,sr\@
+.endm
+
+/* video RAM test through an offset register + data port: every word its own
+ * index (address lines), then AAAA, then 5555 - the game's own patterns.
+ * On mismatch: A5 = offset, D5 = expected, D6 = got, jump to <fail>.
+ * Uses A1,A2,D0-D3. */
+.macro VRTEST oreg, dport, nwords, fail
+    lea     \oreg,%a1
+    lea     \dport,%a2
+    move.w  #\nwords-1,%d0
+vu\@:
+    move.w  %d0,(%a1)
+    move.w  %d0,(%a2)
+    dbra    %d0,vu\@
+    move.w  #\nwords-1,%d0
+vv\@:
+    move.w  %d0,(%a1)
+    move.w  (%a2),%d1
+    cmp.w   %d0,%d1
+    jne     vxu\@
+    dbra    %d0,vv\@
+    move.w  #0xaaaa,%d2
+vp\@:
+    move.w  #\nwords-1,%d0
+vw\@:
+    move.w  %d0,(%a1)
+    move.w  %d2,(%a2)
+    dbra    %d0,vw\@
+    move.w  #\nwords-1,%d0
+vr\@:
+    move.w  %d0,(%a1)
+    move.w  (%a2),%d1
+    cmp.w   %d2,%d1
+    jne     vx\@
+    dbra    %d0,vr\@
+    cmp.w   #0x5555,%d2
+    jeq     vz\@
+    move.w  #0x5555,%d2
+    jra     vp\@
+vxu\@:
+    move.w  %d0,%d2
+vx\@:
+    moveq   #0,%d3
+    move.w  %d0,%d3
+    movea.l %d3,%a5
+    move.w  %d2,%d5
+    move.w  %d1,%d6
+    jra     \fail
+vz\@:
+.endm
+
+/* remember a video RAM failure (bit n) and its detail in work RAM */
+.macro SAVEDET n
+    bset    #\n,VRBITS+1
+    move.l  %a5,VRA
+    move.w  %d5,VRE
+    move.w  %d6,VRG
+.endm
+
+/* "<label>  PASS|FAIL" for video RAM n. Uses A2,A6,D0,D4. */
+.macro PRINTVR line, lbl, n
+    PRINTSTR \lbl, \line
+    btst    #\n,VRBITS+1
+    jne     pf\@
+    PRINTSTR s_pass, (\line + 12*CHARSTEP)
+    jra     pz\@
+pf\@:
+    PRINTSTR s_fail, (\line + 12*CHARSTEP)
+pz\@:
+.endm
+
+/* wait (with timeout) for the Z80 to write FF to its $8000 = 68000 $7A001.
+ * Jumps to <tmo> on timeout. Uses D7. */
+.macro ZWAIT tmo
+    move.l  #Z_TMO,%d7
+zw\@:
+    cmpi.b  #0xff,SHR_BASE+1
+    jeq     zk\@
+    subq.l  #1,%d7
+    jne     zw\@
+    jra     \tmo
+zk\@:
 .endm
 
 /* jump to <target> if P1 button 1 is held. Uses A2,D0. */
@@ -635,6 +763,135 @@ pal_fail:
     move.w  #1,(%a1)
 pal_done:
 
+/* ====== STAGE 4: text / foreground / background video RAM ======
+ * With the screen off, as the game does. The text test overwrites the text
+ * layer, so it is saved to work RAM first and put back afterwards (if the
+ * text RAM reads back wrong, that copy is garbled too - the result line,
+ * printed after the restore, still tells you). */
+    move.b  #L_SCRNOFF,(%a0)
+    lea     TXSAVE,%a1
+    move.w  #0,%d0
+txsv:
+    move.w  %d0,(%a3)
+    move.w  (%a4),(%a1)+
+    addq.w  #1,%d0
+    cmp.w   #TX_WORDS,%d0
+    jne     txsv
+    clr.w   VRBITS
+    VRTEST  TXOFFS, TXDATA, TX_WORDS, tx_fail
+    jra     tx_done
+tx_fail:
+    SAVEDET 0
+tx_done:
+    lea     TXSAVE,%a1
+    move.w  #0,%d0
+txrs:
+    move.w  %d0,(%a3)
+    move.w  (%a1)+,(%a4)
+    addq.w  #1,%d0
+    cmp.w   #TX_WORDS,%d0
+    jne     txrs
+    VRTEST  FGOFFS, FGDATA, FG_WORDS, fg_fail
+    jra     fg_done
+fg_fail:
+    SAVEDET 1
+fg_done:
+    VRTEST  BGOFFS, BGDATA, BG_WORDS, bg_fail
+    jra     bg_done
+bg_fail:
+    SAVEDET 2
+bg_done:
+    move.b  #L_SCRNON,(%a0)
+    PRINTVR L_TXV, s_txv, 0
+    PRINTVR L_FGV, s_fgv, 1
+    PRINTVR L_BGV, s_bgv, 2
+    tst.w   VRBITS
+    jeq     vr_done
+    lea     FLAG,%a1
+    move.w  #1,(%a1)
+    movea.l VRA,%a5
+    move.w  VRE,%d5
+    move.w  VRG,%d6
+    PRINTDET L_VRD
+vr_done:
+
+/* ====== STAGE 5: sound CPU (Z80) ======
+ * 5a. shared RAM with the Z80 held in reset (8-bit: low byte only). */
+    move.b  #L_SNDRST0,(%a0)
+    RAMTEST SHR_BASE, SHR_WORDS, 0x00ff, shr_fail
+    PRINTSTR shrok, L_SHR
+    jra     shr_done
+shr_fail:
+    PRINTSTR shrbad, L_SHR
+    PRINTDET L_SHRD
+    lea     FLAG,%a1
+    move.w  #1,(%a1)
+shr_done:
+
+/* 5b. release the Z80: it must write FF to $8000 from its own ROM code,
+ *     then answer the game's 12 ROM-block commands. The blocks are CRC'd,
+ *     which checks the sound ROM through the Z80. */
+    lea     SHR_BASE,%a1
+    clr.w   (%a1)
+    clr.w   2(%a1)
+    move.b  #L_SNDRUN,(%a0)
+    ZWAIT   snd_dead
+/* AA = start. The Z80 then adds up its whole ROM (~0.4 s); a non-zero sum
+ * makes it write 00 to $8000 and stop for good (the game then hangs). */
+    lea     SHR_BASE,%a1
+    move.w  #0x00aa,2(%a1)
+    DELAY   Z_SUMDLY
+    cmpi.b  #0x00,SHR_BASE+1
+    jeq     snd_sum
+    moveq   #-1,%d1                     /* CRC32 running value */
+    move.w  #0x00f0,%d4                 /* first command */
+snd_cmd:
+    lea     SHR_BASE,%a1
+    move.w  %d4,(%a1)
+    ZWAIT   snd_norep
+    lea     SHR_BASE+0x401,%a1
+    lea     crc32tab,%a2
+    move.w  #1024-1,%d0
+snd_crc:
+    moveq   #0,%d2
+    move.b  (%a1),%d2
+    addq.l  #2,%a1
+    eor.b   %d1,%d2
+    lsl.w   #2,%d2
+    lsr.l   #8,%d1
+    move.l  (%a2,%d2.w),%d3
+    eor.l   %d3,%d1
+    dbra    %d0,snd_crc
+    addq.w  #1,%d4
+    cmp.w   #0x00fc,%d4
+    jne     snd_cmd
+    not.l   %d1
+    move.l  %d1,%d5
+    PRINTSTR sndok, L_SND
+    PRINTSTR s_sdat, L_SDAT
+    PRINTHEX %d5, 8, (L_SDAT + 11*CHARSTEP)
+    lea     t_tcw,%a1
+    cmp.l   #Z_CRC_TC,%d5
+    jeq     snd_name
+    lea     s_unknown,%a1               /* other sets: not known, not a failure */
+snd_name:
+    PRINTSTRR %a1, (L_SDAT + 20*CHARSTEP)
+    jra     snd_done
+snd_dead:
+    PRINTSTR snddead, L_SND
+    jra     snd_bad
+snd_sum:
+    PRINTSTR sndsum, L_SND
+    jra     snd_bad
+snd_norep:
+    move.l  %d4,%d5
+    PRINTSTR sndnorep, L_SND
+    PRINTHEX %d5, 2, (L_SND + 25*CHARSTEP)
+snd_bad:
+    lea     FLAG,%a1
+    move.w  #1,(%a1)
+snd_done:
+
 /* summary line + heartbeat pattern */
     lea     FLAG,%a1
     tst.w   (%a1)
@@ -678,8 +935,10 @@ fp:
  * The heartbeat pin (LS259 pin 6) goes high at the start of each cycle as a
  * scope trigger. The two read-backs are shown live. B2 stops.
  * Register-only (no stack, no work RAM), so it also works when work RAM is
- * the thing that failed. D5 = target index (0 work, 1 sprite, 2 palette). */
+ * the thing that failed. D5 = target index (0 work, 1 sprite, 2 palette,
+ * 3 Z80 shared RAM; the Z80 is held in reset while the menu runs). */
 menu:
+    move.b  #L_SNDRST0,(%a0)            /* Z80 off the shared RAM while looping */
     moveq   #0,%d5
 menu_show:
     PRINTSTR m_title, L_M0
@@ -708,16 +967,17 @@ m_poll:
 m_up:
     subq.w  #1,%d5
     jpl     m_target
-    moveq   #2,%d5
+    moveq   #3,%d5
     jra     m_target
 m_down:
     addq.w  #1,%d5
-    cmp.w   #3,%d5
+    cmp.w   #4,%d5
     jlt     m_target
     moveq   #0,%d5
     jra     m_target
 
 loop_go:
+    movea.w %d5,%a1                     /* keep the target index (A1 is free here) */
     WAITREL
     PRINTSTR m_run,  L_M3
     PRINTSTR m_run2, (L_M3 + 13*CHARSTEP)
@@ -749,9 +1009,7 @@ lp:
     btst    #5,%d0                      /* B2: stop */
     jeq     lp_outer
     WAITREL
-    move.l  %a5,%d5                     /* recover the target index: */
-    swap    %d5                         /* $03/$04/$05 -> 0/1/2 */
-    subq.w  #3,%d5
+    move.w  %a1,%d5                     /* recover the target index */
     jra     menu_show
 
 /* ============================ data ============================ */
@@ -787,6 +1045,18 @@ allok:     .asciz "ALL TESTS PASS"
 somebad:   .asciz "SOME TESTS FAILED"
 s_unknown: .asciz "UNKNOWN"
 novbl:     .asciz "NO VBLANK SIGNAL"
+s_pass:    .asciz "PASS"
+s_fail:    .asciz "FAIL"
+s_txv:     .asciz "TEXT VRAM"
+s_fgv:     .asciz "FG VRAM"
+s_bgv:     .asciz "BG VRAM"
+shrok:     .asciz "SHARED RAM  PASS"
+shrbad:    .asciz "SHARED RAM  FAIL"
+sndok:     .asciz "SOUND CPU   OK"
+snddead:   .asciz "SOUND CPU   NOT RUNNING"
+sndnorep:  .asciz "SOUND CPU   NO REPLY CMD"
+sndsum:    .asciz "SOUND CPU   ROM SUM BAD"
+s_sdat:    .asciz "SOUND ROM"
 t_tcw:     .asciz "TC WORLD"
 t_tcu:     .asciz "TC USA"
 t_kt:      .asciz "K TIGER"
@@ -884,8 +1154,10 @@ m_run2:  .asciz "WFFFF R"
 n_work:  .asciz "WORK RAM   "
 n_spr:   .asciz "SPRITE RAM "
 n_pal:   .asciz "PALETTE RAM"
+n_shr:   .asciz "SHARED RAM "
     .even
 loop_tab:
     .long 0x030000, n_work
     .long 0x040000, n_spr
     .long 0x050000, n_pal
+    .long 0x07a000, n_shr
