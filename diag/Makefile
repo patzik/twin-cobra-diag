@@ -35,7 +35,7 @@ spin: $(SPIN_EVEN) $(SPIN_ODD)
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/stage0.o: $(SRC) src/video.inc src/pages.inc src/gamepal.inc | $(BUILD)
+$(BUILD)/stage0.o: $(SRC) src/video.inc src/pages.inc src/gamepal.inc src/dipdata.inc | $(BUILD)
 	$(AS) $(ASFLAGS) $< -o $@
 
 $(BUILD)/hb.o: src/stage0.s | $(BUILD)

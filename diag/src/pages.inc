@@ -80,7 +80,7 @@ mm_ok:
     bsr     page_init
     bsr     wait_release                /* a button still held is not a new press */
     SAY     s_mtitle, 0, 0, A_YELLOW
-    SAY     s_mhelp, 28, 0, A_GREY
+    SAY     s_mhelp, 30, 0, A_GREY
 mm_draw:
     bsr     mm_items
 mm_loop:
@@ -116,7 +116,7 @@ mm_3:
     jsr     (%a1)
     jra     main_menu
 
-    .equ MM_N, 12
+    .equ MM_N, 13
 mm_items:
     lea     mm_str,%a5
     moveq   #0,%d6                      /* item */
@@ -156,6 +156,7 @@ page_init:
     move.b  #L_SCRNOFF,(%a0)
     move.b  #L_FGBANK0,(%a0)
     move.b  #L_BGBANK0,(%a0)
+    move.b  #L_FLIP0,(%a0)
     FLOOD   C_BLACK
     lea     PAL_TXT0+2,%a1
     moveq   #6,%d0
@@ -362,15 +363,17 @@ prh:
 pg_inputs:
     bsr     page_init
     SAY     s_in_t, 0, 0, A_YELLOW
-    SAY     s_zwait, 20, 0, A_GREY
+    SAY     s_zwait, 9, 0, A_GREY
     bsr     z80_start                   /* SYS comes through the Z80 */
     tst.w   %d0
     jeq     pin_up
-    SAY     s_zdead, 20, 0, A_YELLOW
+    SAY     s_zdead, 9, 0, A_YELLOW
     jra     pin_up2
 pin_up:
-    SAY     s_zok, 20, 0, A_GREY
+    SAY     s_zok, 9, 0, A_GREY
 pin_up2:
+    move.w  #-1,DIPOLD                  /* force the meanings to be drawn */
+    bsr     dip_list                    /* A5 = this set's list, set name on line 16 */
     SAY     s_in_p1, 3, 0, A_WHITE
     SAY     s_in_p2, 5, 0, A_WHITE
     SAY     s_in_sy, 7, 0, A_WHITE
@@ -378,7 +381,7 @@ pin_up2:
     SAY     s_in_d1, 11, 0, A_WHITE
     SAY     s_in_d2, 13, 0, A_WHITE
     SAY     s_in_sw, 14, 0, A_GREY
-    SAY     s_in_h, 24, 0, A_GREY
+    SAY     s_in_h, 31, 0, A_GREY
 pin_loop:
     bsr     wait_frame
     move.w  P1IN,%d6
@@ -396,6 +399,7 @@ pin_loop:
     move.w  0x078002,%d6                /* DSW2 */
     move.w  #(ORG - 13 + 5*CHARSTEP),%d4
     bsr     in_dsw
+    bsr     dip_show
     move.w  P1IN,%d0
     and.w   #(K_B1+K_B2),%d0
     cmp.w   #(K_B1+K_B2),%d0
@@ -431,6 +435,85 @@ inn_2:
     addq.w  #1,%d6
     jra     inn_1
 inn_3:
+    rts
+
+/* ------------------------ DIP switch meanings -------------------------- */
+    .equ DIPOLD,    0x033fbc               /* DSW1 << 8 | DSW2 last drawn */
+    .equ DIPLST,    0x033fbe               /* list in use (long) */
+/* pick the list for the set stage 3 recognised; unknown = TC World */
+dip_list:
+    move.l  SETPTR,%d0
+    lea     dl_tcw,%a5
+    lea     s_dset_u,%a2
+    cmp.l   #t_tcw,%d0
+    jne     dls_1
+    lea     t_tcw,%a2
+dls_1:
+    cmp.l   #t_tcu,%d0
+    jne     dls_2
+    lea     dl_tcu,%a5
+    lea     t_tcu,%a2
+dls_2:
+    cmp.l   #t_kt,%d0
+    jne     dls_3
+    lea     dl_kt,%a5
+    lea     t_kt,%a2
+dls_3:
+    cmp.l   #t_kta,%d0
+    jne     dls_4
+    lea     dl_kta,%a5
+    lea     t_kta,%a2
+dls_4:
+    move.l  %a5,DIPLST
+    move.l  %a2,-(%sp)
+    SAY     s_dset, 16, 0, A_GREY
+    movea.l (%sp)+,%a2
+    TXY     16, 9
+    move.w  #A_GREY,%d2
+    bsr     prs
+    rts
+
+/* redraw the meanings (lines 17 on) when a switch changed */
+dip_show:
+    move.w  0x078000,%d0
+    lsl.w   #8,%d0
+    move.b  0x078003,%d0                /* low byte of DSW2 */
+    cmp.w   DIPOLD,%d0
+    jeq     dsh_x
+    move.w  %d0,DIPOLD
+    movea.l DIPLST,%a5
+    move.w  #(ORG - 17),%d6             /* line offset */
+dsh_e:
+    move.w  (%a5)+,%d0                  /* bank, -1 = end */
+    jmi     dsh_x
+    move.w  (%a5)+,%d1                  /* mask */
+    movea.l (%a5)+,%a2                  /* label */
+    movea.l (%a5)+,%a1                  /* value table */
+    move.w  DIPOLD,%d3
+    tst.w   %d0
+    jne     dsh_b2
+    lsr.w   #8,%d3
+dsh_b2:
+    and.w   %d1,%d3                     /* this setting's bits */
+    move.w  %d6,%d4
+    move.w  #A_WHITE,%d2
+    move.l  %a1,-(%sp)
+    bsr     prs                         /* label */
+    movea.l (%sp)+,%a1
+dsh_v:
+    move.w  (%a1)+,%d0
+    jmi     dsh_n
+    movea.l (%a1)+,%a2
+    cmp.w   %d3,%d0
+    jne     dsh_v
+    move.w  %d6,%d4
+    add.w   #13*CHARSTEP,%d4
+    move.w  #A_YELLOW,%d2
+    bsr     prs                         /* value */
+dsh_n:
+    subq.w  #1,%d6
+    jra     dsh_e
+dsh_x:
     rts
 
 /* "xx  10010000": switch 1 first */
@@ -1440,18 +1523,332 @@ sc_px:
 /* Sends a code to the Z80 the way the game does: write it to its $8000
  * ($7A001) and wait for it to answer FF. 01-25 are sounds/music (bits 6-7
  * pick the channel group), FE stops everything. */
+/* --------------------------- sound submenu ---------------------------- */
+    .equ SM_SEL,    0x033fb0
+    .equ ZUP,       0x033fb2               /* 0 = the Z80 came up when the submenu started it */
+    .equ CO_SEL,    0x033fb4
+    .equ CO_LOCK,   0x033fb6               /* lockout states, bit 0 = 1, bit 1 = 2 */
+    .equ CO_CNT,    0x033fb8               /* pulses sent per counter (2 words) */
+    .equ SM_N,      3
 pg_sound:
+    move.w  #0,SM_SEL
     bsr     page_init
-    move.w  #0x0001,SCODE
     SAY     s_so_t, 0, 0, A_YELLOW
     SAY     s_zwait, 12, 0, A_GREY
     bsr     z80_start
-    tst.w   %d0
-    jeq     pso_up
-    SAY     s_zdead, 12, 0, A_YELLOW
-    jra     pso_up2
-pso_up:
+    move.w  %d0,ZUP
+psm_draw:
+    bsr     page_init
+    SAY     s_so_t, 0, 0, A_YELLOW
     SAY     s_zok, 12, 0, A_GREY
+    tst.w   ZUP
+    jeq     psm_1
+    SAY     s_zdead, 12, 0, A_YELLOW
+psm_1:
+    SAY     s_sm_h, 24, 0, A_GREY
+psm_items:
+    lea     sm_str,%a5
+    moveq   #0,%d6
+    move.w  #(ORG - 3),%d5
+psm_i:
+    movea.l (%a5)+,%a2
+    move.w  %d5,%d4
+    add.w   #2*CHARSTEP,%d4
+    move.w  #A_WHITE,%d2
+    cmp.w   SM_SEL,%d6
+    jne     psm_i2
+    move.w  #A_YELLOW,%d2
+psm_i2:
+    bsr     prs
+    move.w  %d5,%d4
+    move.w  #0x002d,%d0
+    cmp.w   SM_SEL,%d6
+    jne     psm_i3
+    move.w  #(A_YELLOW + 0x07f6),%d0
+psm_i3:
+    bsr     tx_put
+    subq.w  #2,%d5
+    addq.w  #1,%d6
+    cmp.w   #SM_N,%d6
+    jne     psm_i
+psm_loop:
+    bsr     wait_frame
+    bsr     read_inp
+    move.w  IN_EDGE,%d0
+    btst    #5,%d0
+    jne     psm_exit
+    move.w  SM_SEL,%d1
+    btst    #0,%d0
+    jeq     psm_u
+    subq.w  #1,%d1
+    jpl     psm_u
+    moveq   #SM_N-1,%d1
+psm_u:
+    btst    #1,%d0
+    jeq     psm_d
+    addq.w  #1,%d1
+    cmp.w   #SM_N,%d1
+    jcs     psm_d
+    moveq   #0,%d1
+psm_d:
+    cmp.w   SM_SEL,%d1
+    jeq     psm_b1
+    move.w  %d1,SM_SEL
+    jra     psm_items
+psm_b1:
+    btst    #4,%d0
+    jeq     psm_loop
+    bsr     wait_release
+    move.w  SM_SEL,%d0
+    lsl.w   #2,%d0
+    lea     sm_jt,%a1
+    movea.l (%a1,%d0.w),%a1
+    jsr     (%a1)
+    jra     psm_draw
+psm_exit:
+    bsr     wait_release
+    rts
+
+/* send command D1 to the Z80 and wait for its FF (~0.5 s). D0 = 0 answered,
+ * 1 not. Uses D0,D7. */
+z80_cmd:
+    move.w  %d1,SHR_BASE
+    move.l  #0x00020000,%d7
+zcm_w:
+    cmpi.b  #0xff,SHR_BASE+1
+    jeq     zcm_ok
+    subq.l  #1,%d7
+    jne     zcm_w
+    moveq   #1,%d0
+    rts
+zcm_ok:
+    moveq   #0,%d0
+    rts
+
+/* ------------------------- YM3812 timer test --------------------------- */
+/* The game's Z80 program only takes a command inside its YM3812 timer
+ * interrupt, so the rate it answers a harmless command (00) at is the timer
+ * rate. 110 frames (~2 s): a working board answers dozens of times; none at
+ * all, while the Z80 itself starts, means no timer interrupt: a dead or
+ * unclocked YM3812, or its /IRQ not reaching the Z80. */
+pg_ymtest:
+    bsr     page_init
+    SAY     s_ym_t, 0, 0, A_YELLOW
+    SAY     s_ym_1, 3, 0, A_WHITE
+    SAY     s_ym_2, 4, 0, A_GREY
+    SAY     s_ym_run, 7, 0, A_WHITE
+    SAY     s_sm_back, 24, 0, A_GREY
+pym_go:
+    moveq   #0,%d5                      /* answers */
+    moveq   #0,%d6                      /* frames */
+    move.w  #0x0000,SHR_BASE            /* command 00 */
+    move.l  #0x00180000,%d7             /* safety stop (~3 s) without a VBLANK input */
+    btst    #7,VBL_IN
+    sne     %d3                         /* last VBLANK state */
+pym_l:
+    subq.l  #1,%d7
+    jeq     pym_done
+    btst    #7,VBL_IN
+    sne     %d2
+    cmp.b   %d2,%d3
+    jeq     pym_c
+    move.b  %d2,%d3
+    tst.b   %d2
+    jne     pym_c                       /* count the end of each VBLANK */
+    addq.w  #1,%d6
+    cmp.w   #110,%d6
+    jcc     pym_done
+pym_c:
+    cmpi.b  #0xff,SHR_BASE+1
+    jne     pym_l
+    addq.w  #1,%d5
+    move.w  #0x0000,SHR_BASE            /* next one */
+    jra     pym_l
+pym_done:
+    SAY     s_ym_ans, 7, 0, A_WHITE
+    move.w  #(ORG - 7 + 8*CHARSTEP),%d4
+    moveq   #4,%d3
+    move.w  #A_YELLOW,%d2
+    bsr     prh
+    tst.w   %d5
+    jeq     pym_dead
+    SAY     s_ym_ok, 9, 0, A_WHITE
+    jra     pym_w
+pym_dead:
+    SAY     s_ym_dead, 9, 0, A_YELLOW
+    SAY     s_ym_d1, 11, 0, A_GREY
+    SAY     s_ym_d2, 12, 0, A_GREY
+pym_w:
+    bsr     wait_frame
+    bsr     read_inp
+    move.w  IN_EDGE,%d0
+    btst    #5,%d0
+    jne     pym_x
+    btst    #4,%d0
+    jeq     pym_w
+    SAY     s_ym_run, 7, 0, A_WHITE
+    jra     pym_go
+pym_x:
+    bsr     wait_release
+    rts
+
+/* ----------------------- coin counters / lockouts ---------------------- */
+/* The coin latch is the Z80's (port $20); the game's Z80 program writes it
+ * for commands E0-E7: E0/E1 counter 1 off/on, E2/E3 counter 2, E4/E5
+ * lockout 1, E6/E7 lockout 2. B1 on a counter pulses it once (one click),
+ * on a lockout toggles it. */
+pg_coins:
+    bsr     page_init
+    move.w  #0,CO_SEL
+    move.w  #0,CO_LOCK
+    move.l  #0,CO_CNT
+    SAY     s_co_t2, 0, 0, A_YELLOW
+    SAY     s_co_h1, 14, 0, A_GREY
+    SAY     s_co_h2, 15, 0, A_GREY
+    SAY     s_co_back, 24, 0, A_GREY
+    move.w  #0xe4,%d1                   /* both lockouts off to start */
+    bsr     z80_cmd
+    move.w  #0xe6,%d1
+    bsr     z80_cmd
+pcc_d:
+    lea     co_str,%a5
+    moveq   #0,%d6
+    move.w  #(ORG - 3),%d5
+pcc_i:
+    movea.l (%a5)+,%a2
+    move.w  %d5,%d4
+    add.w   #2*CHARSTEP,%d4
+    move.w  #A_WHITE,%d2
+    cmp.w   CO_SEL,%d6
+    jne     pcc_i2
+    move.w  #A_YELLOW,%d2
+pcc_i2:
+    bsr     prs
+    add.w   #CHARSTEP,%d4
+    /* state: counters show the pulses sent, lockouts ON / OFF */
+    cmp.w   #2,%d6
+    jcc     pcc_lk
+    moveq   #0,%d5
+    lea     CO_CNT,%a1
+    move.w  %d6,%d0
+    add.w   %d0,%d0
+    move.w  (%a1,%d0.w),%d5
+    moveq   #4,%d3
+    move.w  #A_WHITE,%d2
+    move.l  %d6,-(%sp)
+    bsr     prh
+    move.l  (%sp)+,%d6
+    move.w  %d6,%d5
+    lsl.w   #1,%d5
+    neg.w   %d5
+    add.w   #(ORG - 3),%d5
+    jra     pcc_n
+pcc_lk:
+    lea     s_co_off,%a2
+    move.w  %d6,%d0
+    subq.w  #2,%d0
+    move.w  CO_LOCK,%d1
+    btst    %d0,%d1
+    jeq     pcc_lk2
+    lea     s_co_on,%a2
+pcc_lk2:
+    move.w  #A_WHITE,%d2
+    bsr     prs
+pcc_n:
+    move.w  #(ORG - 3),%d5
+    move.w  %d6,%d0
+    addq.w  #1,%d0
+    add.w   %d0,%d0
+    sub.w   %d0,%d5                     /* next item line */
+    move.w  %d5,%d4
+    add.w   #2,%d4                      /* cursor cell of this item */
+    move.w  #0x002d,%d0
+    cmp.w   CO_SEL,%d6
+    jne     pcc_n2
+    move.w  #(A_YELLOW + 0x07f6),%d0
+pcc_n2:
+    bsr     tx_put
+    addq.w  #1,%d6
+    cmp.w   #4,%d6
+    jne     pcc_i
+pcc_loop:
+    bsr     wait_frame
+    bsr     read_inp
+    move.w  IN_EDGE,%d0
+    btst    #5,%d0
+    jne     pcc_x
+    move.w  CO_SEL,%d1
+    btst    #0,%d0
+    jeq     pcc_u
+    subq.w  #1,%d1
+    jpl     pcc_u
+    moveq   #3,%d1
+pcc_u:
+    btst    #1,%d0
+    jeq     pcc_dn
+    addq.w  #1,%d1
+    and.w   #3,%d1
+pcc_dn:
+    cmp.w   CO_SEL,%d1
+    jeq     pcc_b1
+    move.w  %d1,CO_SEL
+    jra     pcc_d
+pcc_b1:
+    btst    #4,%d0
+    jeq     pcc_loop
+    move.w  CO_SEL,%d2
+    cmp.w   #2,%d2
+    jcc     pcc_tog
+/* counter: on, 6 frames, off */
+    move.w  %d2,%d1
+    add.w   %d1,%d1
+    add.w   #0xe1,%d1                   /* E1 / E3 = on */
+    bsr     z80_cmd
+    moveq   #5,%d3
+pcc_p:
+    bsr     wait_frame
+    dbra    %d3,pcc_p
+    move.w  CO_SEL,%d1
+    add.w   %d1,%d1
+    add.w   #0xe0,%d1                   /* E0 / E2 = off */
+    bsr     z80_cmd
+    lea     CO_CNT,%a1
+    move.w  CO_SEL,%d0
+    add.w   %d0,%d0
+    addq.w  #1,(%a1,%d0.w)
+    jra     pcc_d
+pcc_tog:
+    subq.w  #2,%d2                      /* 0 / 1 */
+    move.w  CO_LOCK,%d1
+    bchg    %d2,%d1
+    move.w  %d1,CO_LOCK
+    move.w  %d2,%d1
+    add.w   %d1,%d1
+    add.w   #0xe4,%d1                   /* E4 / E6 = off */
+    move.w  CO_LOCK,%d0
+    btst    %d2,%d0
+    jeq     pcc_t2
+    addq.w  #1,%d1                      /* E5 / E7 = on */
+pcc_t2:
+    bsr     z80_cmd
+    jra     pcc_d
+pcc_x:
+    move.w  #0xe4,%d1
+    bsr     z80_cmd
+    move.w  #0xe6,%d1
+    bsr     z80_cmd
+    bsr     wait_release
+    rts
+
+/* ------------------------------ sound codes ---------------------------- */
+pso_codes:
+    bsr     page_init
+    move.w  #0x0001,SCODE
+    SAY     s_so_t, 0, 0, A_YELLOW
+    SAY     s_zok, 12, 0, A_GREY
+    tst.w   ZUP
+    jeq     pso_up2
+    SAY     s_zdead, 12, 0, A_YELLOW
 pso_up2:
     SAY     s_so_c, 3, 0, A_WHITE
     SAY     s_so_h1, 6, 0, A_GREY
@@ -1837,6 +2234,205 @@ spt_cols:
     .short  0x001f, 0x03e0, 0x7fff
     .short  0x001f, 0x01ff, 0x03ff, 0x03e0, 0x7fe0, 0x7c00, 0x7c1f, 0x4210
 
+/* ============================== layer test ============================= */
+/* B1 steps through four parts, B2 exits:
+ *  LAYERS   BG fills the screen (blue), an FG band (green) across it, a text
+ *           band (red) across both: red must be on top, then green, then blue
+ *  BG BANK  BG video RAM bank 0 all blue, bank 1 all dark red; latch Q4 swaps
+ *           them every half second, so the screen must alternate
+ *  FG BANK  a page of FG tiles; latch Q5 swaps the FG ROM bank every half
+ *           second, so it must alternate between two different pictures
+ *  FLIP     latch Q3 turns the picture upside down every second */
+    .equ LY_MODE,   0x033faa
+    .equ LY_TMR,    0x033fac
+    .equ LY_ST,     0x033fae               /* the bit being toggled: 0 / 1 */
+
+pg_layers:
+    move.w  #0,LY_MODE
+ply_new:
+    bsr     page_init
+    bsr     ly_pal
+    SAY     s_st_h, 36, 0, A_GREY
+    move.w  #0,LY_TMR
+    move.w  #0,LY_ST
+    move.w  LY_MODE,%d0
+    jeq     ply_lay
+    cmp.w   #1,%d0
+    jeq     ply_bgb
+    cmp.w   #2,%d0
+    jeq     ply_fgb
+/* ---- FLIP ---- */
+    SAY     s_ly_t, 0, 0, A_YELLOW
+    SAY     s_ly_flip, 0, 11, A_WHITE
+    SAY     s_ly_top, 3, 0, A_YELLOW
+    SAY     s_ly_bot, 33, 0, A_YELLOW
+    SAY     s_ly_fl1, 16, 0, A_WHITE
+    SAY     s_ly_fl2, 18, 0, A_GREY
+    SAY     s_ly_foff, 20, 0, A_YELLOW
+    jra     ply_loop
+/* ---- LAYERS ---- */
+ply_lay:
+    lea     BGOFFS,%a1
+    lea     BGDATA,%a2
+    move.w  #(0x1000 + BG_SOLID),%d6
+    bsr     ly_fill                     /* whole BG blue */
+    move.w  #(ORG - 10),%d5             /* FG band: lines 10-17 */
+    moveq   #7,%d2
+pla_fg:
+    move.w  %d5,%d4
+    moveq   #29,%d1
+pla_fg2:
+    move.w  %d4,FGOFFS
+    move.w  #(0x1000 + FG_SOLID),FGDATA
+    add.w   #CHARSTEP,%d4
+    dbra    %d1,pla_fg2
+    subq.w  #1,%d5
+    dbra    %d2,pla_fg
+    move.w  #(ORG - 5 + 12*CHARSTEP),%d5   /* text band: lines 5-22, chars 12-17 */
+    moveq   #17,%d2
+pla_tx:
+    move.w  %d5,%d4
+    moveq   #5,%d1
+pla_tx2:
+    move.w  %d4,(%a3)
+    move.w  #(0x3000 + 0x07f6),(%a4)    /* solid, text set 6 (red) */
+    add.w   #CHARSTEP,%d4
+    dbra    %d1,pla_tx2
+    subq.w  #1,%d5
+    dbra    %d2,pla_tx
+    SAY     s_ly_t, 0, 0, A_YELLOW
+    SAY     s_ly_lay, 0, 11, A_WHITE
+    SAY     s_ly_l1, 26, 0, A_WHITE
+    SAY     s_ly_l2, 28, 0, A_WHITE
+    SAY     s_ly_l3, 30, 0, A_WHITE
+    jra     ply_loop
+/* ---- BG BANK ---- */
+ply_bgb:
+    lea     BGOFFS,%a1
+    lea     BGDATA,%a2
+    move.w  #(0x1000 + BG_SOLID),%d6
+    bsr     ly_fill                     /* bank 0: blue */
+    move.b  #(L_BGBANK0 + 1),(%a0)
+    move.w  #(0x2000 + BG_SOLID),%d6
+    bsr     ly_fill                     /* bank 1: dark red */
+    move.b  #L_BGBANK0,(%a0)
+    SAY     s_ly_t, 0, 0, A_YELLOW
+    SAY     s_ly_bgb, 0, 11, A_WHITE
+    SAY     s_ly_b1, 30, 0, A_WHITE
+    SAY     s_ly_b2, 31, 0, A_WHITE
+    jra     ply_loop
+/* ---- FG BANK ---- */
+ply_fgb:
+    move.w  #1,VLAY
+    move.w  #0,PG
+    move.w  #0,VCOL
+    bsr     pv_setcol                   /* FG set 0 = game colours */
+    bsr     pv_page                     /* tiles 0000-00FF */
+    SAY     s_ly_clr, 0, 0, A_WHITE
+    SAY     s_ly_clr, 1, 0, A_WHITE
+    SAY     s_ly_clr, 2, 0, A_WHITE
+    SAY     s_ly_t, 0, 0, A_YELLOW
+    SAY     s_ly_fgb, 0, 11, A_WHITE
+    SAY     s_ly_g1, 22, 0, A_WHITE
+    SAY     s_ly_g2, 23, 0, A_GREY
+ply_loop:
+    bsr     wait_frame
+    bsr     read_inp
+    move.w  IN_EDGE,%d0
+    btst    #5,%d0
+    jne     ply_exit
+    btst    #4,%d0
+    jeq     ply_tick
+    move.w  LY_MODE,%d0
+    addq.w  #1,%d0
+    cmp.w   #4,%d0
+    jcs     ply_m
+    moveq   #0,%d0
+ply_m:
+    move.w  %d0,LY_MODE
+    bsr     wait_release
+    jra     ply_new
+/* toggle the part's latch bit: every 30 frames (banks), 60 (flip) */
+ply_tick:
+    move.w  LY_MODE,%d1
+    jeq     ply_loop                    /* LAYERS: nothing moves */
+    addq.w  #1,LY_TMR
+    moveq   #30,%d2
+    cmp.w   #3,%d1
+    jne     plt_1
+    moveq   #60,%d2
+plt_1:
+    cmp.w   LY_TMR,%d2
+    jhi     ply_loop
+    move.w  #0,LY_TMR
+    eori.w  #1,LY_ST
+    move.w  LY_ST,%d0
+    cmp.w   #1,%d1
+    jne     plt_2
+    or.w    #L_BGBANK0,%d0              /* 08 / 09 */
+    move.b  %d0,(%a0)
+    SAY     s_ly_show, 33, 0, A_YELLOW
+    jra     plt_n
+plt_2:
+    cmp.w   #2,%d1
+    jne     plt_3
+    or.w    #L_FGBANK0,%d0              /* 0A / 0B */
+    move.b  %d0,(%a0)
+    SAY     s_ly_show, 25, 0, A_YELLOW
+    jra     plt_n
+plt_3:
+    or.w    #L_FLIP0,%d0                /* 06 / 07 */
+    move.b  %d0,(%a0)
+    SAY     s_ly_fon, 20, 0, A_YELLOW
+    tst.w   LY_ST
+    jne     ply_loop
+    SAY     s_ly_foff, 20, 0, A_YELLOW
+    jra     ply_loop
+/* "SHOWING BANK n" at D4 (the SAY left it after the text) */
+plt_n:
+    moveq   #0,%d5
+    move.w  LY_ST,%d5
+    moveq   #1,%d3
+    move.w  #A_YELLOW,%d2
+    bsr     prh
+    jra     ply_loop
+ply_exit:
+    move.b  #L_BGBANK0,(%a0)
+    move.b  #L_FGBANK0,(%a0)
+    move.b  #L_FLIP0,(%a0)
+    bsr     wait_release
+    rts
+
+/* fill a 64x64 layer (A1 offset reg, A2 data port) with D6 */
+ly_fill:
+    move.w  #4095,%d0
+lyf_1:
+    move.w  %d0,(%a1)
+    move.w  %d6,(%a2)
+    dbra    %d0,lyf_1
+    rts
+
+/* BG set 1 blue, set 2 dark red; FG set 1 green; text set 6 pen 7 red */
+ly_pal:
+    move.b  #L_SCRNOFF,(%a0)
+    lea     (PAL_BG0 + 16*2),%a1
+    moveq   #15,%d0
+lyp_1:
+    move.w  #0x5800,(%a1)+
+    dbra    %d0,lyp_1
+    moveq   #15,%d0
+lyp_2:
+    move.w  #0x0012,(%a1)+              /* dark red: text stays readable on it */
+    dbra    %d0,lyp_2
+    lea     (PAL_FG0 + 16*2),%a1
+    moveq   #15,%d0
+lyp_3:
+    move.w  #0x03e0,(%a1)+
+    dbra    %d0,lyp_3
+    move.w  #0x001f,(PAL_TXT0 + (6*8 + 7)*2)
+    move.b  #L_SCRNON,(%a0)
+    rts
+
 /* =============================== DSP test ============================== */
 /* The same self-test as stage 7, on demand; B1 runs it again, B2 exits. */
 pg_dsp:
@@ -1880,13 +2476,20 @@ pdp_exit:
 
 /* ------------------------------ jump table ----------------------------- */
     .include "gamepal.inc"
+    .include "dipdata.inc"
     .even
 mm_jt:
     .long   pg_rerun, pg_loopmenu, pg_inputs, pg_colour, pg_txview
-    .long   pg_fgview, pg_bgview, pg_sprview, pg_sprtest, pg_scroll, pg_sound, pg_dsp
+    .long   pg_fgview, pg_bgview, pg_sprview, pg_sprtest, pg_layers, pg_scroll, pg_sound, pg_dsp
 mm_str:
     .long   s_m_rerun, s_m_loop, s_m_in, s_m_col, s_m_tx
-    .long   s_m_fg, s_m_bg, s_m_spr, s_m_spt, s_m_scr, s_m_snd, s_m_dsp
+    .long   s_m_fg, s_m_bg, s_m_spr, s_m_spt, s_m_lay, s_m_scr, s_m_snd, s_m_dsp
+sm_jt:
+    .long   pso_codes, pg_ymtest, pg_coins
+sm_str:
+    .long   s_sm_codes, s_sm_ym, s_sm_coin
+co_str:
+    .long   s_co_c1, s_co_c2, s_co_l1, s_co_l2
 pv_titles:
     .long   s_pv_tx, s_pv_fg, s_pv_bg
 in_jn:
@@ -1914,6 +2517,7 @@ s_m_fg:    .asciz "FG TILE VIEWER"
 s_m_bg:    .asciz "BG TILE VIEWER"
 s_m_spr:   .asciz "SPRITE VIEWER"
 s_m_spt:   .asciz "SPRITE TEST"
+s_m_lay:   .asciz "LAYER TEST"
 s_m_scr:   .asciz "SCROLL TEST"
 s_m_snd:   .asciz "SOUND TEST"
 s_m_dsp:   .asciz "DSP TEST"
@@ -1927,6 +2531,8 @@ s_in_d1:   .asciz "DSW1"
 s_in_d2:   .asciz "DSW2"
 s_in_sw:   .asciz "     SWITCH 1 TO 8"
 s_in_h:    .asciz "B1 AND B2 TOGETHER  EXIT"
+s_dset:    .asciz "SETTINGS"
+s_dset_u:  .asciz "UNKNOWN SET  TC WORLD"
 s_k_up:    .asciz "UP"
 s_k_dn:    .asciz "DN"
 s_k_lt:    .asciz "LT"
@@ -1950,7 +2556,51 @@ s_pv_h2:   .asciz "B1 COLOURS  B2 EXIT"
 s_pv_col:  .asciz "COLOUR"
 s_pv_pl:   .asciz "PLANES   "
 s_so_t:    .asciz "SOUND TEST"
+s_sm_h:    .asciz "UP DOWN  B1 SELECT  B2 BACK"
+s_sm_back: .asciz "B1 AGAIN  B2 BACK"
+s_sm_codes: .asciz "SOUND CODES"
+s_sm_ym:   .asciz "YM3812 TIMER"
+s_sm_coin: .asciz "COIN COUNTERS"
+s_ym_t:    .asciz "YM3812 TIMER"
+s_ym_1:    .asciz "THE SOUND CPU TAKES COMMANDS"
+s_ym_2:    .asciz "ONLY IN ITS YM3812 TIMER IRQ"
+s_ym_run:  .asciz "COUNTING FOR 2 SECONDS      "
+s_ym_ans:  .asciz "ANSWERS                     "
+s_ym_ok:   .asciz "TIMER RUNNING               "
+s_ym_dead: .asciz "NO TIMER INTERRUPTS         "
+s_ym_d1:   .asciz "CHECK YM3812 CLOCK AND /IRQ"
+s_ym_d2:   .asciz "TO THE SOUND CPU /INT"
+s_co_t2:   .asciz "COIN COUNTERS AND LOCKOUTS"
+s_co_h1:   .asciz "B1 ON A COUNTER  ONE CLICK"
+s_co_h2:   .asciz "B1 ON A LOCKOUT  ON OR OFF"
+s_co_c1:   .asciz "COUNTER 1"
+s_co_c2:   .asciz "COUNTER 2"
+s_co_l1:   .asciz "LOCKOUT 1"
+s_co_l2:   .asciz "LOCKOUT 2"
+s_co_on:   .asciz "ON "
+s_co_off:  .asciz "OFF"
+s_co_back: .asciz "UP DOWN  B1 USE  B2 BACK"
 s_dp_t:    .asciz "DSP TEST"
+s_ly_t:    .asciz "LAYER TEST"
+s_ly_lay:  .asciz "LAYERS"
+s_ly_bgb:  .asciz "BG BANK"
+s_ly_fgb:  .asciz "FG BANK"
+s_ly_flip: .asciz "FLIP SCREEN"
+s_ly_l1:   .asciz "BG BLUE  FG GREEN  TEXT RED"
+s_ly_l2:   .asciz "RED MUST BE ON TOP"
+s_ly_l3:   .asciz "THEN GREEN  THEN BLUE"
+s_ly_b1:   .asciz "BANK 0 BLUE  BANK 1 RED"
+s_ly_b2:   .asciz "MUST ALTERNATE"
+s_ly_g1:   .asciz "FG ROM BANK 0 OR 1"
+s_ly_g2:   .asciz "MUST ALTERNATE"
+s_ly_show: .asciz "SHOWING BANK "
+s_ly_top:  .asciz "TOP"
+s_ly_bot:  .asciz "BOTTOM"
+s_ly_fl1:  .asciz "PICTURE MUST TURN"
+s_ly_fl2:  .asciz "UPSIDE DOWN EVERY SECOND"
+s_ly_fon:  .asciz "FLIP ON "
+s_ly_foff: .asciz "FLIP OFF"
+s_ly_clr:  .asciz "                             "
 s_st_t:    .asciz "SPRITE TEST"
 s_st_h:    .asciz "B1 NEXT PART  B2 EXIT"
 s_st_flip: .asciz "FLIP"

@@ -106,6 +106,8 @@
                                             * a gate that only sometimes leaks) */
     .equ IRQ_FR,    50                     /* frames with it on */
     .equ EXCNO,     0x033fe6               /* unexpected exception number */
+    .equ SETPTR,    0x033fc0               /* name of the set ROM HI matched, 0 = none */
+    .equ SETPTR2,   0x033fc4               /*   (ROM LO, unused) */
 
     /* stage 4: text / foreground / background video RAM, reached through an
      * offset register + data port (no auto-increment), as the game tests them */
@@ -198,7 +200,7 @@
 .endm
 
 /* one ROM chip line: "<label> <crc32> <set name | UNKNOWN>" */
-.macro ROMCHK start, line, lbl
+.macro ROMCHK start, line, lbl, store
     PRINTSTR \lbl, \line
     CRC32S  \start, 0x8000
     move.l  %d1,%d5
@@ -211,6 +213,7 @@ rk\@:
     cmp.l   %d5,%d1
     bne.s   rk\@
     movea.l %d2,%a1
+    move.l  %d2,\store                  /* remember the set (its name) */
     bra.s   rp\@
 ru\@:
     lea     s_unknown,%a1
@@ -688,8 +691,9 @@ vb_ok:
 
 /* 3a. CRC32 of each 27256 program chip at $020000. HI = even bytes (D8-D15),
  *     LO = odd bytes (D0-D7). The game starts executing in these chips. */
-    ROMCHK  PROG2,     L_ROMH, romhi
-    ROMCHK  (PROG2+1), L_ROML, romlo
+    clr.l   SETPTR
+    ROMCHK  PROG2,     L_ROMH, romhi, SETPTR
+    ROMCHK  (PROG2+1), L_ROML, romlo, SETPTR2
 
 /* 3b. sprite RAM $40000-$40FFF, in short bursts right after VBLANK ends (as the
  *     game does): data-bus walk, address uniqueness, AAAA, 5555. */
@@ -787,6 +791,15 @@ fg_done:
 bg_fail:
     SAVEDET 2
 bg_done:
+/* BG video RAM has a second bank (latch Q4): the port then reaches it */
+    move.b  #(L_BGBANK0 + 1),(%a0)
+    VRTEST  BGOFFS, BGDATA, BG_WORDS, bg1_fail
+    jra     bg1_done
+bg1_fail:
+    adda.w  #0x1000,%a5                 /* report bank 1 as offsets 1000-1FFF */
+    SAVEDET 2
+bg1_done:
+    move.b  #L_BGBANK0,(%a0)
     move.b  #L_SCRNON,(%a0)
     PRINTVR L_TXV, s_txv, 0
     PRINTVR L_FGV, s_fgv, 1

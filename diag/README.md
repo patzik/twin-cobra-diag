@@ -66,8 +66,8 @@ the text report replaced that.
   after a real board crashed the game because the interrupt got through while off.
 
 - **Main menu** — input/DIP test, colour test, text/FG/BG tile viewers, sprite viewer,
-  sprite test (flip, priority, full screen), scroll test for all three layers, sound test,
-  DSP test, RAM loop test, rerun. Verified in MAME (`doc/menu_pages.png`, `doc/menu_viewers.png`).
+  sprite test (flip, priority, full screen), layer test (order, BG/FG banks, flip screen),
+  scroll test for all three layers, sound test, DSP test, RAM loop test, rerun. Verified in MAME (`doc/menu_pages.png`, `doc/menu_viewers.png`).
 
 - **Stage 7** — DSP (TMS320C10): the game's own self-test. Verified in MAME (pass, a bad
   DSP ROM bit, a dead DSP). Also on the menu as DSP TEST.
@@ -150,7 +150,9 @@ fails it never starts the sound CPU and hangs** in the same loop as a dead Z80 (
 They are reached through an offset register plus a data port (text `$70004`/`$7E000`, bg
 `$72004`/`$7E002`, fg `$74004`/`$7E004`; no auto-increment). Each one gets an
 address-uniqueness pass (every word its own offset) and the game's own AAAA / 5555 passes,
-with the screen off as the game does. Sizes: text 2048 words, fg 4096, bg 4096 (bank 0).
+with the screen off as the game does. Sizes: text 2048 words, fg 4096, bg 4096 in each of
+its two banks (latch Q4 selects the bank the port reaches; a bank 1 failure is reported
+with offsets 1000-1FFF).
 The text test overwrites the on-screen report, so the text layer is copied to work RAM
 first and put back afterwards. The detail line shows the **last** failing layer; its
 `A` value is the word offset inside that layer.
@@ -280,8 +282,9 @@ needs the stack.
 | TEXT / FG / BG TILE VIEWER | 256 tiles of that layer per page, straight from its ROMs |
 | SPRITE VIEWER | 64 sprites per page |
 | SPRITE TEST | Flip bits, the 3 sprite priorities, and a full screen of 512 moving sprites |
+| LAYER TEST | Layer order, BG RAM bank switch, FG ROM bank switch, flip screen |
 | SCROLL TEST | Scrolls the text, FG or BG layer over a test pattern |
-| SOUND TEST | Sends a sound code to the Z80 and shows whether it answered |
+| SOUND TEST | Submenu: sound codes, YM3812 timer, coin counters and lockouts |
 | DSP TEST | Runs the DSP self-test again (stage 7); B1 repeats it |
 
 ![menu pages](doc/menu_pages.png)
@@ -291,6 +294,19 @@ needs the stack.
 `SV TL TS C1 C2 S1 S2` = service, tilt, test, coin 1, coin 2, start 1, start 2. That last group
 is wired to the **sound CPU**, not the 68000: the Z80 copies it to shared RAM, so it only
 works when stage 5 passed. DIP switches are shown as `0`/`1`, switch 1 first.
+
+Below them the page shows what every switch setting **means** (from MAME's DIP definitions),
+updated live as you flip them: flip screen, test mode, demo sounds, coin A / B, difficulty,
+bonus life, lives, DIP switch display, and the unused switches. The meanings differ per game
+version, so the page uses the version stage 3 recognised from the program ROM CRC
+(`SETTINGS TC WORLD` / `TC USA` / `K TIGER` / `K TIGER ALT`): Twin Cobra World has "world"
+coinage, the USA set and Kyukyoku Tiger "Japan" coinage; on Kyukyoku Tiger SW1-1 is
+invulnerability, on its alternate set SW1-1 is the cabinet type and SW2-8 allows continues
+(with other bonus values). An unrecognised set is shown with the Twin Cobra World meanings.
+Bonus `50K 200K 150K` means extra lives at 50k and 200k, then every 150k. A switch whose
+meaning doesn't follow it points at that switch, its pull-up or the DIP input buffer.
+
+![input test](doc/input_test.png)
 
 **Colour test.** Every line is one level (01-1F) of the 5-bit red, green and blue channels and
 white. A bad resistor, buffer or DAC bit shows as a missing step or a repeated pair of lines
@@ -336,6 +352,22 @@ real board they may sit a few pixels off.
 
 ![sprite test](doc/sprite_test.png)
 
+**Layer test.** B1 steps through four parts, B2 exits:
+
+- **LAYERS** - BG fills the screen in blue, a green FG band runs across it and a red text
+  band crosses both. The order must be **red on top, then green, then blue**; anything else
+  points at the layer mixing (colmix) logic.
+- **BG BANK** - BG video RAM bank 0 is filled blue, bank 1 dark red, and latch Q4 swaps
+  them every half second: the screen must alternate. Stuck on one colour = the bank bit
+  (Q4, LS259 pin 9) doesn't reach the BG RAM address line.
+- **FG BANK** - FG tiles 0000-00FF with latch Q5 swapping the FG ROM bank every half second:
+  the page must alternate between two different pictures (bank 0 = tiles 0000-0FFF, bank 1 =
+  1000-1FFF). Stuck = the bank bit (Q5, LS259 pin 10) doesn't reach the FG ROMs.
+- **FLIP SCREEN** - latch Q3 (LS259 pin 7) turns the picture upside down every second (`TOP`
+  and `BOTTOM` swap ends).
+
+![layer test](doc/layer_test.png)
+
 **Scroll test.** Modelled on the Shinobi test ROM's scroll test. It checks one scroll
 register at a time, so a bad bit can be pinned down.
 
@@ -375,10 +407,30 @@ repair.
 
 ![scroll test](doc/scroll_test.png)
 
-**Sound test.** Up/down change the code by 1, left/right by $10. B1 sends it the way the game
-does (code to the Z80's `$8000`, then wait for `FF`): `OK` means the Z80 took it, `NO REPLY`
-means it didn't (see stage 5). Codes `01`-`25` are the game's sounds and music, with bits
-6-7 selecting the channel group; leaving the page sends `FE`, which stops all sound.
+**Sound test.** Opens a submenu (up/down, B1 select, B2 back). It first starts the Z80 and
+says whether it came up (`SOUND CPU RUNNING` / `NOT RUNNING`). The YM3812 and the coin latch
+are wired to the **Z80**, not the 68000, so everything here goes through commands the game's
+own sound program understands.
+
+- **SOUND CODES** - up/down change the code by 1, left/right by $10. B1 sends it the way the
+  game does (code to the Z80's `$8000`, then wait for `FF`): `OK` means the Z80 took it,
+  `NO REPLY` means it didn't (see stage 5). Codes `01`-`25` are the game's sounds and music,
+  with bits 6-7 selecting the channel group; leaving the page sends `FE`, which stops all
+  sound. This is also the amplifier and speaker check.
+- **YM3812 TIMER** - the Z80 program only takes a command inside its **YM3812 timer
+  interrupt**, so the rate it answers a harmless command at *is* the timer rate. It counts
+  for 2 s: a good board answers about $C0 (~190) times. `ANSWERS 0000` / `NO TIMER
+  INTERRUPTS` while the Z80 runs = the YM3812 has no clock (J1 pin 24, 3.5 MHz on the
+  bootleg schematic), is dead, or its `/IRQ` (J1 pin 2) doesn't reach the Z80's `/INT`
+  (pin 16). This is what a `SOUND CPU NO REPLY` in stage 5 usually means.
+- **COIN COUNTERS** - the Z80's coin latch via commands `E0`-`E7`: B1 on **COUNTER 1 / 2**
+  pulses that meter once (one click, the count goes up), B1 on **LOCKOUT 1 / 2** switches
+  that coin lockout coil on or off. Both lockouts are switched off on entry and exit.
+
+Per-channel test tones aren't possible: the Z80 only runs its own (game) program, so that
+would need a custom sound ROM.
+
+![sound test](doc/sound_test.png)
 
 ## Stage 6 — interrupts
 The game keeps the VBLANK interrupt (68000 level 4) **off** during its start-up tests
