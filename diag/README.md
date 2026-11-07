@@ -278,7 +278,7 @@ needs the stack.
 | RERUN ALL TESTS | Runs every test again from the start |
 | RAM LOOP TEST | The scope loop menu (see above); B2 comes back to the main menu |
 | INPUT AND DIP TEST | P1, P2, coin/start/service/test/tilt and both DIP banks, live |
-| COLOUR TEST | 31 steps each of red, green, blue and white |
+| COLOUR AND MONITOR TEST | 31 steps each of red, green, blue and white, plus monitor test patterns |
 | TEXT / FG / BG TILE VIEWER | 256 tiles of that layer per page, straight from its ROMs |
 | SPRITE VIEWER | 64 sprites per page |
 | SPRITE TEST | Flip bits, the 3 sprite priorities, and a full screen of 512 moving sprites |
@@ -308,10 +308,25 @@ meaning doesn't follow it points at that switch, its pull-up or the DIP input bu
 
 ![input test](doc/input_test.png)
 
-**Colour test.** Every line is one level (01-1F) of the 5-bit red, green and blue channels and
+**Colour and monitor test.** Every line is one level (01-1F) of the 5-bit red, green and blue channels and
 white. A bad resistor, buffer or DAC bit shows as a missing step or a repeated pair of lines
 in that bar. It uses the text layer: characters `$7F0`-`$7F6` in the char ROM are solid
 blocks of pens 1-7, and each text colour set gets one level.
+
+**B1** steps on to the **monitor test patterns**, B2 exits:
+
+| Pattern | Use it for |
+|---|---|
+| **CROSSHATCH** | thin white lines every 8 pixels over the whole picture: size, centring, linearity (the squares must be the same size everywhere), pincushion and convergence (lines must be white, not split into red/green/blue fringes) |
+| **WHITE** | brightness, white balance and purity (no coloured patches) |
+| **RED / GREEN / BLUE** | purity and a dead colour channel or gun: each must fill the screen evenly; a missing or weak one points at that colour's output stage or the monitor |
+
+The crosshatch uses char `$7FA` of the char ROM (a line along its top and left edge) in
+every text cell; the fields fill the BG layer with one solid tile. If the crosshatch is
+squeezed or stretched in one part of the screen while the diag's text elsewhere looks
+normal, suspect the monitor's linearity; if lines wobble or tear, the sync.
+
+![colour test and patterns](doc/colour_patterns.png)
 
 **Tile and sprite viewers.** Up/down = one page, left/right = 16 pages (sprites: 8). The
 number on each row is the first tile on it. They start in the **game's own colours**: the

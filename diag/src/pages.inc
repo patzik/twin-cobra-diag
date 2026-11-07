@@ -543,7 +543,14 @@ ind_2:
 /* Text colour sets 1-31 get level 1-31 of red (pen 1), green (pen 2),
  * blue (pen 3) and white (pen 4); characters $7F0-$7F6 are solid pens 1-7. Each line is one level, so every DAC bit shows up as a
  * step in the bars. */
+/* B1 steps through: colour bars, crosshatch, white, red, green, blue
+ * (monitor test patterns); B2 exits */
+    .equ CO_MODE,   0x033fc8
 pg_colour:
+    move.w  #0,CO_MODE
+pco_new:
+    move.w  CO_MODE,%d0
+    jne     pco_pat
     bsr     page_init
     move.b  #L_SCRNOFF,(%a0)
     lea     PAL_TXT0+16,%a1             /* set 1 */
@@ -573,6 +580,7 @@ pco_p:
     jne     pco_p
     move.b  #L_SCRNON,(%a0)
     SAY     s_co_t, 0, 0, A_WHITE
+    SAY     s_co_rgbw, 1, 0, A_WHITE
     move.w  #(ORG - 2),%d6              /* line of level 1 */
     moveq   #1,%d5                      /* level */
 pco_l:
@@ -598,13 +606,63 @@ pco_l:
     cmp.w   #32,%d5
     jne     pco_l
     SAY     s_exit, 34, 0, A_WHITE
+    SAY     s_co_nx, 35, 0, A_WHITE
 pco_w:
     bsr     wait_frame
     bsr     read_inp
     btst    #5,IN_EDGE+1
+    jne     pco_x
+    btst    #4,IN_EDGE+1
     jeq     pco_w
+    move.w  CO_MODE,%d0                 /* B1: next pattern */
+    addq.w  #1,%d0
+    cmp.w   #6,%d0
+    jcs     pco_m
+    moveq   #0,%d0
+pco_m:
+    move.w  %d0,CO_MODE
+    bsr     wait_release
+    jra     pco_new
+pco_x:
     bsr     wait_release
     rts
+
+/* test patterns: 1 crosshatch, 2-5 white / red / green / blue fields */
+pco_pat:
+    bsr     page_init
+    move.w  CO_MODE,%d0                 /* (page_init used D0) */
+    cmp.w   #1,%d0
+    jne     pco_fld
+/* crosshatch: char $7FA (a line along its top and its left edge) in every
+ * text cell = thin white lines every 8 pixels, to the edges of the picture */
+    move.w  #TX_WORDS-1,%d4
+pcx_1:
+    move.w  %d4,(%a3)
+    move.w  #0x07fa,(%a4)
+    dbra    %d4,pcx_1
+    jra     pco_w
+/* a field: the whole BG layer one solid tile, its colour set all one colour */
+pco_fld:
+    subq.w  #2,%d0
+    add.w   %d0,%d0
+    lea     pco_fcol,%a1
+    move.w  (%a1,%d0.w),%d3
+    move.b  #L_SCRNOFF,(%a0)
+    lea     (PAL_BG0 + 16*2),%a1
+    moveq   #15,%d0
+pcf_1:
+    move.w  %d3,(%a1)+
+    dbra    %d0,pcf_1
+    move.b  #L_SCRNON,(%a0)
+    lea     BGOFFS,%a1
+    lea     BGDATA,%a2
+    move.w  #(0x1000 + BG_SOLID),%d6
+    bsr     ly_fill
+    jra     pco_w
+
+    .even
+pco_fcol:
+    .short  0x7fff, 0x001f, 0x03e0, 0x7c00      /* white, red, green, blue */
 /* 6 cells of solid tile D0 with attribute D2 at D4 (D4 moves on) */
 pco_bar:
     moveq   #5,%d1
@@ -2511,7 +2569,7 @@ s_mhelp:   .asciz "UP DOWN  B1 SELECT"
 s_m_rerun: .asciz "RERUN ALL TESTS"
 s_m_loop:  .asciz "RAM LOOP TEST"
 s_m_in:    .asciz "INPUT AND DIP TEST"
-s_m_col:   .asciz "COLOUR TEST"
+s_m_col:   .asciz "COLOUR AND MONITOR TEST"
 s_m_tx:    .asciz "TEXT TILE VIEWER"
 s_m_fg:    .asciz "FG TILE VIEWER"
 s_m_bg:    .asciz "BG TILE VIEWER"
@@ -2546,7 +2604,9 @@ s_k_c1:    .asciz "C1"
 s_k_c2:    .asciz "C2"
 s_k_s1:    .asciz "S1"
 s_k_s2:    .asciz "S2"
-s_co_t:    .asciz "COLOUR TEST  R  G  B  W"
+s_co_t:    .asciz "COLOUR AND MONITOR TEST"
+s_co_rgbw: .asciz "     R     G     B     W"
+s_co_nx:   .asciz "B1 NEXT PATTERN"
 s_pv_tx:   .asciz "TEXT TILES"
 s_pv_fg:   .asciz "FG TILES"
 s_pv_bg:   .asciz "BG TILES"
