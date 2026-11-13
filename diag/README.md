@@ -68,6 +68,7 @@ the text report replaced that.
 - **Main menu** — input/DIP test, colour test, text/FG/BG tile viewers, sprite viewer,
   sprite test (flip, priority, full screen), layer test (order, BG/FG banks, flip screen),
   VRAM soak test (nonstop video RAM writes during the picture, error counts),
+  high score replay (the game's high score scroll, looped),
   scroll test for all three layers, sound test, DSP test, RAM loop test, rerun. Verified in MAME (`doc/menu_pages.png`, `doc/menu_viewers.png`).
 
 - **Stage 7** — DSP (TMS320C10): the game's own self-test. Verified in MAME (pass, a bad
@@ -288,6 +289,7 @@ needs the stack.
 | SOUND TEST | Submenu: sound codes, YM3812 timer, coin counters and lockouts |
 | DSP TEST | Runs the DSP self-test again (stage 7); B1 repeats it |
 | VRAM SOAK TEST | Writes text, FG and BG video RAM nonstop while the picture is drawn, counts every bad write and every stray sprite RAM write |
+| HIGH SCORE REPLAY | Plays the game's attract-mode high score scroll in a loop, with the game's own text RAM writes and timing; pause and step the scroll |
 
 ![menu pages](doc/menu_pages.png)
 ![viewers](doc/menu_viewers.png)
@@ -425,6 +427,30 @@ scrolls with the layer while scrolling; its own lines (0-2, 36-37) are not teste
 Left to right (MAME): scrolling, stopped, and with write faults injected (one text write in
 400 with bit 9 flipped, one FG write in 400 with bit 2 flipped): counts and a visible bad
 character.
+
+**High score replay.** A glitch that only shows during the game's high score scroll is slow
+to chase with the game ROMs: it lasts about three seconds per attract cycle. This page plays
+that scroll back in a loop, exactly as the game does it. It was captured from the game in
+MAME: the text RAM and text colours it starts from, then frame by frame what the game
+writes to the text layer.
+
+- Each frame the scroll registers are written at the start of VBLANK, as the game does
+  (x from `$089` up to `$1C9` in steps of 2, y `$0E2`).
+- During the scroll the game writes text RAM in only three frames: 37 characters as it
+  starts, a burst of 536 that runs through the top half of the picture, and 96 more later.
+  These writes are replayed in the same frames, spaced out with the game's timing.
+- At `$1C9` it holds for a second, then starts again.
+
+B1 pauses on the current scroll position. Left / right then step it 2 pixels at a time, so a
+position where the glitch shows can be held still for a scope or freeze spray; B1 again
+carries on. B2 exits. The page only uses the text layer (FG/BG blank, sprites off), so if the
+glitch shows here it is in the text path; if it never does, the game's other layers or
+sprites play a part. The captured data is in `src/hsdata.inc`, made by `tools/mkhs.py`
+(game data).
+
+![High score replay](doc/hs_replay.png)
+
+Four moments of the replay (MAME), the same as the game's high score scroll.
 
 **Scroll test.** Modelled on the Shinobi test ROM's scroll test. It checks one scroll
 register at a time, so a bad bit can be pinned down.

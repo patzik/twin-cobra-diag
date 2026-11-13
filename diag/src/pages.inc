@@ -80,7 +80,7 @@ mm_ok:
     bsr     page_init
     bsr     wait_release                /* a button still held is not a new press */
     SAY     s_mtitle, 0, 0, A_YELLOW
-    SAY     s_mhelp, 30, 0, A_GREY
+    SAY     s_mhelp, 32, 0, A_GREY
 mm_draw:
     bsr     mm_items
 mm_loop:
@@ -116,7 +116,7 @@ mm_3:
     jsr     (%a1)
     jra     main_menu
 
-    .equ MM_N, 14
+    .equ MM_N, 15
 mm_items:
     lea     mm_str,%a5
     moveq   #0,%d6                      /* item */
@@ -2925,6 +2925,113 @@ s_sk_h1:   .asciz "B1 SCROLL ON OFF  UP CLEAR"
 s_sk_h2:   .asciz "B2 EXIT"
     .even
 
+/* ---------------------------- high score replay -------------------------
+ * Plays back the game's attract-mode high score scroll, exactly as captured
+ * from the game in MAME: the text RAM and text colours it starts from, then
+ * frame by frame the scroll writes (at the start of VBLANK) and every text
+ * RAM write, spaced out like the game's (the 537-character burst runs
+ * through the top half of the picture). Loops forever, so a glitch that only
+ * shows during the high score scroll can be watched while probing.
+ * B1 pauses on the current scroll position, left / right then step it by
+ * 2 pixels, B1 again carries on; B2 exits. Reuses the soak test's RAM. */
+    .equ HS_PSE,    0x033f58               /* nonzero: paused */
+    .equ HS_SX,     0x033f5a               /* current x scroll */
+pg_hsrep:
+    bsr     page_init
+    lea     hs_pal,%a1
+    lea     PAL_TXT0,%a2
+    move.w  #256-1,%d0
+phr_p:
+    move.w  (%a1)+,(%a2)+
+    dbra    %d0,phr_p
+    clr.w   HS_PSE
+phr_rst:
+    bsr     sk_vbstart
+    lea     hs_tx,%a1                   /* the text RAM the scroll starts from */
+    moveq   #0,%d0
+phr_t:
+    move.w  %d0,(%a3)
+    move.w  (%a1)+,(%a4)
+    addq.w  #1,%d0
+    cmp.w   #2048,%d0
+    jne     phr_t
+    lea     hs_frames,%a5
+    move.w  #HS_NF,%d6                  /* frames left */
+phr_fr:
+    bsr     sk_vbstart
+    tst.w   HS_PSE
+    jne     phr_ps
+    move.w  (%a5)+,%d0
+    move.w  %d0,HS_SX
+    move.w  %d0,TXSCROLL
+    move.w  (%a5)+,TXSCROLL+2
+    move.w  (%a5)+,%d5                  /* text writes this frame */
+    bsr     sk_vbend
+    subq.w  #1,%d5
+    jmi     phr_nw
+phr_w:
+    move.w  (%a5)+,%d0                  /* delay before this write */
+    jmi     phr_w2
+phr_dl:
+    dbra    %d0,phr_dl
+phr_w2:
+    move.w  (%a5)+,(%a3)
+    move.w  (%a5)+,(%a4)
+    dbra    %d5,phr_w
+phr_nw:
+    bsr     phr_inp
+    subq.w  #1,%d6
+    jne     phr_fr
+/* the end: hold the last position a second, like the game, then again */
+    moveq   #59,%d6
+phr_h:
+    bsr     sk_vbstart
+    move.w  HS_SX,TXSCROLL
+    bsr     sk_vbend
+    bsr     phr_inp
+    tst.w   HS_PSE
+    jne     phr_h
+    dbra    %d6,phr_h
+    jra     phr_rst
+/* paused: keep writing the held scroll position, nothing else */
+phr_ps:
+    move.w  HS_SX,TXSCROLL
+    bsr     sk_vbend
+    bsr     phr_inp
+    jra     phr_fr
+
+/* buttons; B2 leaves the page (drops this call's return address) */
+phr_inp:
+    bsr     read_inp
+    move.w  IN_EDGE,%d0
+    btst    #5,%d0
+    jeq     phi_1
+    addq.l  #4,%sp
+    rts
+phi_1:
+    btst    #4,%d0
+    jeq     phi_2
+    eori.w  #1,HS_PSE
+phi_2:
+    tst.w   HS_PSE
+    jeq     phi_x
+    move.w  HS_SX,%d1
+    btst    #2,%d0
+    jeq     phi_3
+    subq.w  #2,%d1
+phi_3:
+    btst    #3,%d0
+    jeq     phi_4
+    addq.w  #2,%d1
+phi_4:
+    and.w   #0x01ff,%d1
+    move.w  %d1,HS_SX
+phi_x:
+    rts
+
+    .include "hsdata.inc"
+    .even
+
 /* ------------------------------ jump table ----------------------------- */
     .include "gamepal.inc"
     .include "dipdata.inc"
@@ -2932,11 +3039,11 @@ s_sk_h2:   .asciz "B2 EXIT"
 mm_jt:
     .long   pg_rerun, pg_loopmenu, pg_inputs, pg_colour, pg_txview
     .long   pg_fgview, pg_bgview, pg_sprview, pg_sprtest, pg_layers, pg_scroll, pg_sound, pg_dsp
-    .long   pg_soak
+    .long   pg_soak, pg_hsrep
 mm_str:
     .long   s_m_rerun, s_m_loop, s_m_in, s_m_col, s_m_tx
     .long   s_m_fg, s_m_bg, s_m_spr, s_m_spt, s_m_lay, s_m_scr, s_m_snd, s_m_dsp
-    .long   s_m_soak
+    .long   s_m_soak, s_m_hsr
 sm_jt:
     .long   pso_codes, pg_ymtest, pg_coins
 sm_str:
@@ -2975,6 +3082,7 @@ s_m_scr:   .asciz "SCROLL TEST"
 s_m_snd:   .asciz "SOUND TEST"
 s_m_dsp:   .asciz "DSP TEST"
 s_m_soak:  .asciz "VRAM SOAK TEST"
+s_m_hsr:   .asciz "HIGH SCORE REPLAY"
 s_exit:    .asciz "B2 EXIT"
 s_in_t:    .asciz "INPUT AND DIP TEST"
 s_in_p1:   .asciz "P1"
