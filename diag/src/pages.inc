@@ -116,7 +116,7 @@ mm_3:
     jsr     (%a1)
     jra     main_menu
 
-    .equ MM_N, 13
+    .equ MM_N, 14
 mm_items:
     lea     mm_str,%a5
     moveq   #0,%d6                      /* item */
@@ -2532,6 +2532,365 @@ pdp_exit:
     bsr     wait_release
     rts
 
+/* ============================== VRAM soak test ==============================
+ * Writes text, FG and BG video RAM nonstop the way the game's busy screens do
+ * (high score table): while the picture is being drawn, with the text layer
+ * scrolling 2 pixels a frame. Each frame one block per layer is written during
+ * the picture and read back in the next VBLANK, so an intermittent write fault
+ * (a marginal contact on the way to the video RAM) is counted, not just seen.
+ *
+ * Text: a regular pattern of 0-F in diagonal stripes, white and yellow bands
+ * of 4 lines. Every pass (32 frames) the whole layer is rewritten with the
+ * complement (all 16 data bits flipped: solid blocks and lines), then back.
+ * A wrong character anywhere breaks the regular pattern. FG and BG are tested
+ * the same way with a per-address pattern, their colours set to black.
+ * FG and BG take 32 words a frame (a pass is 128 frames) so the reads fit in
+ * VBLANK. Panel lines 0-2 and 36-37 are left out of the text soak. */
+    .equ SK_TBLK,   0x033f58               /* text block 0-31 (64 words each) */
+    .equ SK_TPAR,   0x033f5a               /* text pattern: 0 or FFFF (complement) */
+    .equ SK_FBLK,   0x033f5c               /* FG/BG block 0-127 (32 words each) */
+    .equ SK_FPAR,   0x033f5e
+    .equ SK_ERR,    0x033f60               /* error counts: text, FG, BG */
+    .equ SK_PASS,   0x033f66               /* text passes done */
+    .equ SK_LL,     0x033f68               /* last error: layer (-1 = none) */
+    .equ SK_LO,     0x033f6a               /*   offset */
+    .equ SK_LE,     0x033f6c               /*   written */
+    .equ SK_LG,     0x033f6e               /*   read back */
+    .equ SK_SCR,    0x033f70               /* nonzero: text layer scrolls */
+    .equ SK_SX,     0x033f72               /* text scroll value */
+    .equ SK_WR,     0x033f74               /* nonzero: a block is waiting to be checked */
+
+pg_soak:
+    bsr     page_init
+/* FG and BG colours all black: their test data shows as nothing */
+    lea     PAL_BG0,%a1
+    move.w  #512-1,%d0
+psk_p:
+    move.w  #C_BLACK,(%a1)+
+    dbra    %d0,psk_p
+/* text sets 31 and 30 (the complement of sets 0 and 1): grey and dark
+ * yellow, so the solid-block half of the pattern isn't glaring */
+    lea     PAL_TXT0+31*16+2,%a1
+    lea     PAL_TXT0+30*16+2,%a2
+    moveq   #6,%d0
+psk_c:
+    move.w  #C_GREY,(%a1)+
+    move.w  #0x018c,(%a2)+
+    dbra    %d0,psk_c
+    moveq   #0,%d0
+    move.w  %d0,SK_TBLK
+    move.w  %d0,SK_TPAR
+    move.w  %d0,SK_FBLK
+    move.w  %d0,SK_FPAR
+    move.w  %d0,SK_PASS
+    move.w  %d0,SK_WR
+    move.w  #1,SK_SCR
+    move.w  #SCR_X,SK_SX
+    bsr     sk_clear
+    SAY     s_sk_t, 0, 0, A_YELLOW
+    SAY     s_sk_e, 1, 0, A_GREY
+    SAY     s_sk_h1, 36, 0, A_GREY
+    SAY     s_sk_h2, 37, 0, A_GREY
+psk_loop:
+    bsr     sk_vbstart
+    tst.w   SK_WR
+    jeq     psk_new
+    bsr     sk_check
+/* next blocks; a wrapped block counter flips that layer's pattern */
+    move.w  SK_TBLK,%d0
+    addq.w  #1,%d0
+    and.w   #31,%d0
+    move.w  %d0,SK_TBLK
+    jne     psk_a
+    not.w   SK_TPAR
+    addq.w  #1,SK_PASS
+psk_a:
+    move.w  SK_FBLK,%d0
+    addq.w  #1,%d0
+    and.w   #127,%d0
+    move.w  %d0,SK_FBLK
+    jne     psk_new
+    not.w   SK_FPAR
+psk_new:
+/* scroll like the high score table: 2 pixels a frame */
+    move.w  #SCR_X,%d0
+    tst.w   SK_SCR
+    jeq     psk_s
+    move.w  SK_SX,%d0
+    addq.w  #2,%d0
+    and.w   #0x01ff,%d0
+    move.w  %d0,SK_SX
+psk_s:
+    move.w  %d0,TXSCROLL
+    bsr     sk_vbend                    /* the writes go in while the picture is drawn */
+    bsr     sk_write
+    move.w  #1,SK_WR
+    bsr     sk_panel
+    bsr     read_inp
+    move.w  IN_EDGE,%d0
+    btst    #5,%d0                      /* B2: exit */
+    jne     psk_x
+    btst    #4,%d0                      /* B1: scroll on / off */
+    jeq     psk_b
+    eori.w  #1,SK_SCR
+    move.w  #SCR_X,SK_SX
+psk_b:
+    btst    #0,%d0                      /* up: clear the counts */
+    jeq     psk_loop
+    bsr     sk_clear
+    jra     psk_loop
+psk_x:
+    move.w  #SCR_X,TXSCROLL
+    bsr     wait_release
+    rts
+
+sk_clear:
+    moveq   #0,%d0
+    move.w  %d0,SK_ERR
+    move.w  %d0,SK_ERR+2
+    move.w  %d0,SK_ERR+4
+    move.w  #-1,SK_LL
+    rts
+
+/* wait for VBLANK to start / to end (a fixed delay without a VBLANK input).
+ * Uses D7. */
+sk_vbstart:
+    tst.w   VBDEAD
+    jne     skv_d
+    move.l  #VB_TMO,%d7
+skv_1:
+    btst    #7,VBL_IN
+    jne     skv_r
+    subq.l  #1,%d7
+    jne     skv_1
+skv_r:
+    rts
+skv_d:
+    DELAY   0x3000
+    rts
+sk_vbend:
+    tst.w   VBDEAD
+    jne     skv_r
+    move.l  #VB_TMO,%d7
+skv_2:
+    btst    #7,VBL_IN
+    jeq     skv_r
+    subq.l  #1,%d7
+    jne     skv_2
+    rts
+
+/* text value for offset D0 with pattern mask D3 -> D1; D2 = 0, or nonzero
+ * for a panel cell (left alone). The offset's low 6 bits pick the screen
+ * line: line = (38 - x) & 63. */
+sk_txval:
+    move.w  %d0,%d1
+    and.w   #63,%d1                     /* x */
+    moveq   #38,%d2
+    sub.w   %d1,%d2
+    and.w   #63,%d2                     /* screen line */
+    cmp.w   #3,%d2
+    jcs     sktv_p
+    cmp.w   #36,%d2
+    jcs     sktv_n
+    cmp.w   #38,%d2
+    jcs     sktv_p
+sktv_n:
+    move.w  %d0,%d2
+    lsr.w   #6,%d2                      /* y */
+    add.w   %d1,%d2
+    and.w   #15,%d2                     /* tile 0-F: digits and A-F */
+    lsr.w   #2,%d1
+    and.w   #1,%d1                      /* colour set 0 / 1 in bands of 4 lines */
+    moveq   #11,%d7
+    lsl.w   %d7,%d1
+    or.w    %d2,%d1
+    eor.w   %d3,%d1
+    moveq   #0,%d2
+    rts
+sktv_p:
+    moveq   #1,%d2
+    rts
+
+/* FG / BG value for offset D0, mask D3, layer constant D6 -> D1: a different
+ * value at every address, so a wrong address shows up too */
+sk_fbval:
+    move.w  %d0,%d1
+    move.w  %d0,%d2
+    lsl.w   #4,%d2
+    eor.w   %d2,%d1
+    lsl.w   #5,%d2
+    eor.w   %d2,%d1
+    eor.w   %d6,%d1
+    eor.w   %d3,%d1
+    rts
+
+/* write this frame's blocks */
+sk_write:
+    move.w  SK_TPAR,%d3
+    move.w  SK_TBLK,%d0
+    lsl.w   #6,%d0
+    moveq   #63,%d5
+skw_t:
+    bsr     sk_txval
+    tst.w   %d2
+    jne     skw_t2
+    move.w  %d0,(%a3)
+    move.w  %d1,(%a4)
+skw_t2:
+    addq.w  #1,%d0
+    dbra    %d5,skw_t
+    move.w  SK_FPAR,%d3
+    lea     FGOFFS,%a1
+    lea     FGDATA,%a2
+    move.w  #0x3c5a,%d6
+    bsr     skw_fb
+    lea     BGOFFS,%a1
+    lea     BGDATA,%a2
+    move.w  #0xa5c3,%d6
+skw_fb:
+    move.w  SK_FBLK,%d0
+    lsl.w   #5,%d0
+    moveq   #31,%d5
+skw_f:
+    bsr     sk_fbval
+    move.w  %d0,(%a1)
+    move.w  %d1,(%a2)
+    addq.w  #1,%d0
+    dbra    %d5,skw_f
+    rts
+
+/* read last frame's blocks back (in VBLANK) */
+sk_check:
+    move.w  SK_TPAR,%d3
+    move.w  SK_TBLK,%d0
+    lsl.w   #6,%d0
+    moveq   #63,%d5
+skc_t:
+    bsr     sk_txval
+    tst.w   %d2
+    jne     skc_t2
+    move.w  %d0,(%a3)
+    move.w  (%a4),%d4
+    cmp.w   %d1,%d4
+    jeq     skc_t2
+    moveq   #0,%d6
+    bsr     sk_err
+skc_t2:
+    addq.w  #1,%d0
+    dbra    %d5,skc_t
+    move.w  SK_FPAR,%d3
+    lea     FGOFFS,%a1
+    lea     FGDATA,%a2
+    move.w  #0x3c5a,%d6
+    moveq   #1,%d2
+    bsr     skc_fb
+    lea     BGOFFS,%a1
+    lea     BGDATA,%a2
+    move.w  #0xa5c3,%d6
+    moveq   #2,%d2
+skc_fb:
+    move.w  %d2,-(%sp)                  /* layer number */
+    move.w  SK_FBLK,%d0
+    lsl.w   #5,%d0
+    moveq   #31,%d5
+skc_f:
+    bsr     sk_fbval
+    move.w  %d0,(%a1)
+    move.w  (%a2),%d4
+    cmp.w   %d1,%d4
+    jeq     skc_f2
+    move.w  %d6,-(%sp)
+    move.w  2(%sp),%d6
+    bsr     sk_err
+    move.w  (%sp)+,%d6
+skc_f2:
+    addq.w  #1,%d0
+    dbra    %d5,skc_f
+    addq.l  #2,%sp
+    rts
+
+/* count an error: layer D6, offset D0, written D1, read D4 */
+sk_err:
+    lea     SK_ERR,%a5
+    move.w  %d6,%d2
+    add.w   %d2,%d2
+    cmp.w   #0xffff,(%a5,%d2.w)
+    jeq     ske_1
+    addq.w  #1,(%a5,%d2.w)
+ske_1:
+    move.w  %d6,SK_LL
+    move.w  %d0,SK_LO
+    move.w  %d1,SK_LE
+    move.w  %d4,SK_LG
+    rts
+
+/* the numbers on the panel */
+sk_panel:
+    TXY     0, 21
+    move.w  SK_PASS,%d5
+    moveq   #4,%d3
+    move.w  #A_WHITE,%d2
+    bsr     prh
+    lea     SK_ERR,%a5
+    TXY     1, 10
+    moveq   #2,%d6
+skp_e:
+    move.w  (%a5)+,%d5
+    move.w  #A_WHITE,%d2
+    tst.w   %d5
+    jeq     skp_e2
+    move.w  #A_YELLOW,%d2
+skp_e2:
+    moveq   #4,%d3
+    bsr     prh
+    add.w   #4*CHARSTEP,%d4
+    dbra    %d6,skp_e
+    move.w  SK_LL,%d0
+    jpl     skp_l
+    SAY     s_sk_none, 2, 0, A_GREY
+    rts
+skp_l:
+    lsl.w   #2,%d0
+    lea     sk_lnames,%a2
+    movea.l (%a2,%d0.w),%a2
+    TXY     2, 0
+    move.w  #A_YELLOW,%d2
+    bsr     prs
+    move.w  SK_LO,%d5
+    moveq   #4,%d3
+    move.w  #A_WHITE,%d2
+    bsr     prh
+    lea     s_sk_w,%a2
+    move.w  #A_YELLOW,%d2
+    bsr     prs
+    move.w  SK_LE,%d5
+    moveq   #4,%d3
+    move.w  #A_WHITE,%d2
+    bsr     prh
+    lea     s_sk_r,%a2
+    move.w  #A_YELLOW,%d2
+    bsr     prs
+    move.w  SK_LG,%d5
+    moveq   #4,%d3
+    move.w  #A_WHITE,%d2
+    bsr     prh
+    rts
+
+    .even
+sk_lnames:
+    .long   s_sk_ltx, s_sk_lfg, s_sk_lbg
+s_sk_t:    .asciz "VRAM SOAK TEST  PASS"
+s_sk_e:    .asciz "ERRORS TX      FG      BG"
+s_sk_none: .asciz "LAST ERROR NONE             "
+s_sk_ltx:  .asciz "LAST TX "
+s_sk_lfg:  .asciz "LAST FG "
+s_sk_lbg:  .asciz "LAST BG "
+s_sk_w:    .asciz " W "
+s_sk_r:    .asciz " R "
+s_sk_h1:   .asciz "B1 SCROLL ON OFF  UP CLEAR"
+s_sk_h2:   .asciz "B2 EXIT"
+    .even
+
 /* ------------------------------ jump table ----------------------------- */
     .include "gamepal.inc"
     .include "dipdata.inc"
@@ -2539,9 +2898,11 @@ pdp_exit:
 mm_jt:
     .long   pg_rerun, pg_loopmenu, pg_inputs, pg_colour, pg_txview
     .long   pg_fgview, pg_bgview, pg_sprview, pg_sprtest, pg_layers, pg_scroll, pg_sound, pg_dsp
+    .long   pg_soak
 mm_str:
     .long   s_m_rerun, s_m_loop, s_m_in, s_m_col, s_m_tx
     .long   s_m_fg, s_m_bg, s_m_spr, s_m_spt, s_m_lay, s_m_scr, s_m_snd, s_m_dsp
+    .long   s_m_soak
 sm_jt:
     .long   pso_codes, pg_ymtest, pg_coins
 sm_str:
@@ -2579,6 +2940,7 @@ s_m_lay:   .asciz "LAYER TEST"
 s_m_scr:   .asciz "SCROLL TEST"
 s_m_snd:   .asciz "SOUND TEST"
 s_m_dsp:   .asciz "DSP TEST"
+s_m_soak:  .asciz "VRAM SOAK TEST"
 s_exit:    .asciz "B2 EXIT"
 s_in_t:    .asciz "INPUT AND DIP TEST"
 s_in_p1:   .asciz "P1"

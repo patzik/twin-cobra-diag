@@ -67,6 +67,7 @@ the text report replaced that.
 
 - **Main menu** — input/DIP test, colour test, text/FG/BG tile viewers, sprite viewer,
   sprite test (flip, priority, full screen), layer test (order, BG/FG banks, flip screen),
+  VRAM soak test (nonstop video RAM writes during the picture, error counts),
   scroll test for all three layers, sound test, DSP test, RAM loop test, rerun. Verified in MAME (`doc/menu_pages.png`, `doc/menu_viewers.png`).
 
 - **Stage 7** — DSP (TMS320C10): the game's own self-test. Verified in MAME (pass, a bad
@@ -286,6 +287,7 @@ needs the stack.
 | SCROLL TEST | Scrolls the text, FG or BG layer over a test pattern |
 | SOUND TEST | Submenu: sound codes, YM3812 timer, coin counters and lockouts |
 | DSP TEST | Runs the DSP self-test again (stage 7); B1 repeats it |
+| VRAM SOAK TEST | Writes text, FG and BG video RAM nonstop while the picture is drawn, counts every bad write |
 
 ![menu pages](doc/menu_pages.png)
 ![viewers](doc/menu_viewers.png)
@@ -382,6 +384,40 @@ real board they may sit a few pixels off.
   and `BOTTOM` swap ends).
 
 ![layer test](doc/layer_test.png)
+
+**VRAM soak test.** For faults that only show now and then, like characters that go wrong
+for a single frame on the game's high score table. That screen scrolls the text layer
+2 pixels a frame and rewrites text video RAM all the time, also while the picture is being
+drawn, when the 68000 and the video circuit share the RAM. A marginal contact on the way to
+the video RAM (ribbon cables, the custom replacement's sockets) then makes an occasional
+write land wrong. The power-on test writes with the screen off and the scroll test hardly
+writes at all, so neither catches it. This page copies the game's pattern:
+
+- Every frame one block of each layer is written **while the picture is drawn** and read
+  back in the following VBLANK (text 64 words, so the whole layer every 32 frames; FG and
+  BG 32 words, every 128 frames). Each pass writes the complement of the last one, so every
+  data line flips on every word.
+- The **text layer shows the test data**: diagonal stripes of `0`-`F` in white and yellow
+  bands, then (next pass) the complement as stripes of grey and dark yellow blocks. Both
+  must stay perfectly regular: a wrong character stays visible until its block is rewritten
+  (up to half a second). It scrolls like the high score table.
+- FG and BG are tested the same way with a different value at every address, their
+  colours set to black (they don't show).
+- The panel counts errors per layer (`ERRORS TX FG BG`, yellow once non-zero) and shows the
+  last one: layer, offset, the value written (`W`) and read back (`R`). XOR of W and R gives
+  the failing data bit(s); repeated offsets with one changing address bit point at an
+  address line. `PASS` counts text passes.
+
+B1 stops / starts the scroll (stopped, the panel sits still at the top to read), up clears
+the counts, B2 exits. Leave it running and flex the cables, press on the custom replacement
+and the connectors one at a time: the counters jump when you touch the bad spot. The panel
+scrolls with the layer while scrolling; its own lines (0-2, 36-37) are not tested.
+
+![VRAM soak test](doc/vram_soak.png)
+
+Left to right (MAME): scrolling, stopped, and with write faults injected (one text write in
+400 with bit 9 flipped, one FG write in 400 with bit 2 flipped): counts and a visible bad
+character.
 
 **Scroll test.** Modelled on the Shinobi test ROM's scroll test. It checks one scroll
 register at a time, so a bad bit can be pinned down.
