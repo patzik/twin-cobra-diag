@@ -287,7 +287,7 @@ needs the stack.
 | SCROLL TEST | Scrolls the text, FG or BG layer over a test pattern |
 | SOUND TEST | Submenu: sound codes, YM3812 timer, coin counters and lockouts |
 | DSP TEST | Runs the DSP self-test again (stage 7); B1 repeats it |
-| VRAM SOAK TEST | Writes text, FG and BG video RAM nonstop while the picture is drawn, counts every bad write |
+| VRAM SOAK TEST | Writes text, FG and BG video RAM nonstop while the picture is drawn, counts every bad write and every stray sprite RAM write |
 
 ![menu pages](doc/menu_pages.png)
 ![viewers](doc/menu_viewers.png)
@@ -403,8 +403,15 @@ writes at all, so neither catches it. This page copies the game's pattern:
   (up to half a second). It scrolls like the high score table.
 - FG and BG are tested the same way with a different value at every address, their
   colours set to black (they don't show).
-- The panel counts errors per layer (`ERRORS TX FG BG`, yellow once non-zero) and shows the
-  last one: layer, offset, the value written (`W`) and read back (`R`). XOR of W and R gives
+- **Sprite RAM** is watched too. Every sprite is off, so all of it must stay zero; the
+  page reads 64 words of it each VBLANK (all of it every 32 frames) and counts any word
+  that isn't zero, then clears it. On this board the video RAM data bus also runs over the
+  ribbon to the top board, where the sprite RAM is, so a glitchy sprite RAM select or
+  write strobe there turns soak writes into stray sprite RAM writes: odd sprite fragments
+  in the sprite test colours appear behind the text, and `SP` counts them.
+- The panel counts errors per layer (`TX FG BG SP`, yellow once non-zero) and shows the
+  last one: layer, offset (for `SP` the word in sprite RAM, 4 words a sprite), the value
+  written (`W`, always 0 for `SP`) and read back (`R`). XOR of W and R gives
   the failing data bit(s); repeated offsets with one changing address bit point at an
   address line. `PASS` counts text passes.
 

@@ -2550,8 +2550,9 @@ pdp_exit:
     .equ SK_TPAR,   0x033f5a               /* text pattern: 0 or FFFF (complement) */
     .equ SK_FBLK,   0x033f5c               /* FG/BG block 0-127 (32 words each) */
     .equ SK_FPAR,   0x033f5e
-    .equ SK_ERR,    0x033f60               /* error counts: text, FG, BG */
-    .equ SK_PASS,   0x033f66               /* text passes done */
+    .equ SK_ERR,    0x033f60               /* error counts: text, FG, BG, sprite RAM */
+    .equ SK_PASS,   0x033f76               /* text passes done */
+    .equ SK_SBLK,   0x033f78               /* sprite RAM block 0-31 (64 words each) */
     .equ SK_LL,     0x033f68               /* last error: layer (-1 = none) */
     .equ SK_LO,     0x033f6a               /*   offset */
     .equ SK_LE,     0x033f6c               /*   written */
@@ -2583,6 +2584,7 @@ psk_c:
     move.w  %d0,SK_FBLK
     move.w  %d0,SK_FPAR
     move.w  %d0,SK_PASS
+    move.w  %d0,SK_SBLK
     move.w  %d0,SK_WR
     move.w  #1,SK_SCR
     move.w  #SCR_X,SK_SX
@@ -2596,6 +2598,7 @@ psk_loop:
     tst.w   SK_WR
     jeq     psk_new
     bsr     sk_check
+    bsr     sk_sprchk
 /* next blocks; a wrapped block counter flips that layer's pattern */
     move.w  SK_TBLK,%d0
     addq.w  #1,%d0
@@ -2649,6 +2652,7 @@ sk_clear:
     move.w  %d0,SK_ERR
     move.w  %d0,SK_ERR+2
     move.w  %d0,SK_ERR+4
+    move.w  %d0,SK_ERR+6
     move.w  #-1,SK_LL
     rts
 
@@ -2809,6 +2813,35 @@ skc_f2:
     addq.l  #2,%sp
     rts
 
+/* sprite RAM should stay all zero (every sprite off): any word that isn't
+ * was written by something else - a stray write over the shared video data
+ * bus. Checks 64 words a frame (all of it in 32 frames) in VBLANK, counts
+ * each bad word as layer 3 and clears it again. */
+sk_sprchk:
+    move.w  SK_SBLK,%d0
+    lsl.w   #6,%d0                      /* first word index */
+    move.w  %d0,%d1
+    add.w   %d1,%d1
+    lea     SPR_BASE,%a1
+    adda.w  %d1,%a1
+    moveq   #63,%d5
+sks_1:
+    move.w  (%a1),%d4
+    jeq     sks_2
+    clr.w   (%a1)
+    moveq   #0,%d1
+    moveq   #3,%d6
+    bsr     sk_err
+sks_2:
+    addq.l  #2,%a1
+    addq.w  #1,%d0
+    dbra    %d5,sks_1
+    move.w  SK_SBLK,%d0
+    addq.w  #1,%d0
+    and.w   #31,%d0
+    move.w  %d0,SK_SBLK
+    rts
+
 /* count an error: layer D6, offset D0, written D1, read D4 */
 sk_err:
     lea     SK_ERR,%a5
@@ -2832,8 +2865,8 @@ sk_panel:
     move.w  #A_WHITE,%d2
     bsr     prh
     lea     SK_ERR,%a5
-    TXY     1, 10
-    moveq   #2,%d6
+    TXY     1, 2
+    moveq   #3,%d6
 skp_e:
     move.w  (%a5)+,%d5
     move.w  #A_WHITE,%d2
@@ -2843,7 +2876,7 @@ skp_e:
 skp_e2:
     moveq   #4,%d3
     bsr     prh
-    add.w   #4*CHARSTEP,%d4
+    add.w   #3*CHARSTEP,%d4
     dbra    %d6,skp_e
     move.w  SK_LL,%d0
     jpl     skp_l
@@ -2878,13 +2911,14 @@ skp_l:
 
     .even
 sk_lnames:
-    .long   s_sk_ltx, s_sk_lfg, s_sk_lbg
+    .long   s_sk_ltx, s_sk_lfg, s_sk_lbg, s_sk_lsp
 s_sk_t:    .asciz "VRAM SOAK TEST  PASS"
-s_sk_e:    .asciz "ERRORS TX      FG      BG"
+s_sk_e:    .asciz "TX     FG     BG     SP"
 s_sk_none: .asciz "LAST ERROR NONE             "
 s_sk_ltx:  .asciz "LAST TX "
 s_sk_lfg:  .asciz "LAST FG "
 s_sk_lbg:  .asciz "LAST BG "
+s_sk_lsp:  .asciz "LAST SP "
 s_sk_w:    .asciz " W "
 s_sk_r:    .asciz " R "
 s_sk_h1:   .asciz "B1 SCROLL ON OFF  UP CLEAR"
