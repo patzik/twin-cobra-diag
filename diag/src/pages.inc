@@ -2933,7 +2933,8 @@ s_sk_h2:   .asciz "B2 EXIT"
  * through the top half of the picture). Loops forever, so a glitch that only
  * shows during the high score scroll can be watched while probing.
  * B1 pauses on the current scroll position, left / right then step it by
- * 2 pixels, B1 again carries on; B2 exits. Reuses the soak test's RAM. */
+ * 2 pixels, B1 again carries on; B2 exits. Reuses the soak test's RAM.
+ * Like the game, it clears the sprites every frame. */
     .equ HS_PSE,    0x033f58               /* nonzero: paused */
     .equ HS_SX,     0x033f5a               /* current x scroll */
 pg_hsrep:
@@ -2959,6 +2960,7 @@ phr_t:
     move.w  #HS_NF,%d6                  /* frames left */
 phr_fr:
     bsr     sk_vbstart
+    bsr     phr_spr
     tst.w   HS_PSE
     jne     phr_ps
     move.w  (%a5)+,%d0
@@ -2986,6 +2988,7 @@ phr_nw:
     moveq   #59,%d6
 phr_h:
     bsr     sk_vbstart
+    bsr     phr_spr
     move.w  HS_SX,TXSCROLL
     bsr     sk_vbend
     bsr     phr_inp
@@ -2999,6 +3002,20 @@ phr_ps:
     bsr     sk_vbend
     bsr     phr_inp
     jra     phr_fr
+
+/* every sprite off again, each VBLANK: the game rewrites its whole sprite
+ * list every frame, so a stray sprite RAM write (see the soak test) shows
+ * for one frame at most. Without this it would stay on screen. Clears the
+ * attribute word (priority 0 = hidden) of all 512 sprites. */
+phr_spr:
+    lea     SPR_BASE+2,%a1
+    move.w  #512-1,%d0
+    moveq   #0,%d1
+phs_1:
+    move.w  %d1,(%a1)
+    addq.l  #8,%a1
+    dbra    %d0,phs_1
+    rts
 
 /* buttons; B2 leaves the page (drops this call's return address) */
 phr_inp:

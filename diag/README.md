@@ -440,6 +440,10 @@ writes to the text layer.
   starts, a burst of 536 that runs through the top half of the picture, and 96 more later.
   These writes are replayed in the same frames, spaced out with the game's timing.
 - At `$1C9` it holds for a second, then starts again.
+- Every VBLANK all sprites are switched off again. The game rewrites its whole sprite list
+  every frame, so a stray sprite RAM write (the soak test shows these on both boards) is
+  gone a frame later; without this the junk would build up on screen and look like a
+  fault the game doesn't have.
 
 B1 pauses on the current scroll position. Left / right then step it 2 pixels at a time, so a
 position where the glitch shows can be held still for a scope or freeze spray; B1 again
