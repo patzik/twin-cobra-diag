@@ -429,26 +429,26 @@ character.
 
 **High score replay.** A glitch that only shows during the game's high score scroll is slow
 to chase with the game ROMs: it lasts about three seconds per attract cycle. This page plays
-that scroll back in a loop, exactly as the game does it. It was captured from the game in
-MAME: the text RAM and text colours it starts from, then frame by frame what the game
-writes to the text layer.
+that scroll back in a loop, exactly as the game does it, captured from the game in MAME:
 
-- Each frame the scroll registers are written at the start of VBLANK, as the game does
-  (x from `$089` up to `$1C9` in steps of 2, y `$0E2`).
-- During the scroll the game writes text RAM in only three frames: 37 characters as it
-  starts, a burst of 536 that runs through the top half of the picture, and 96 more later.
-  These writes are replayed in the same frames, spaced out with the game's timing.
+- First the game's whole video state from the frame before the scroll starts: all 1792
+  colours, text, FG and BG RAM (FG and BG are filled with the dark blue background tile),
+  sprite RAM (264 sprites switched on, all placed off screen), and the scroll registers.
+  Colours and layers load with the screen off (palette RAM only takes writes then, or in
+  VBLANK), sprite RAM in short bursts right after VBLANK, as the game does.
+- Then, frame by frame, every video write the game makes. In VBLANK: the scroll registers
+  of all three layers (text x from `$089` up to `$1C9` in steps of 2) and a few BG colours.
+  In the picture: its text RAM writes, in only three frames (37 characters as the scroll
+  starts, a burst of 536 through the top half of the picture, 96 more later), spaced out
+  with the game's timing.
+- Left out: the latch writes for the VBLANK interrupt and the per-frame DSP kick.
 - At `$1C9` it holds for a second, then starts again.
-- The text colours are loaded with the screen off: palette RAM only takes writes then
-  (the game does the same). Every VBLANK all sprites are switched off again, as the game
-  rewrites its sprite list every frame.
 
-B1 pauses on the current scroll position. Left / right then step it 2 pixels at a time, so a
-position where the glitch shows can be held still for a scope or freeze spray; B1 again
-carries on. B2 exits. The page only uses the text layer (FG/BG blank, sprites off), so if the
-glitch shows here it is in the text path; if it never does, the game's other layers or
-sprites play a part. The captured data is in `src/hsdata.inc`, made by `tools/mkhs.py`
-(game data).
+B1 pauses on the current scroll position. Left / right then step the text layer 2 pixels at
+a time, so a position where the glitch shows can be held still for a scope or freeze spray;
+B1 again carries on. B2 exits. On a good board it must look exactly like the game's high
+score scroll. The captured data is in `src/hsdata.inc` (included at the end of `diag.s`),
+made by `tools/mkhs.py` (game data).
 
 ![High score replay](doc/hs_replay.png)
 

@@ -1593,3 +1593,8 @@ loop_tab:
     .long 0x040000, n_spr
     .long 0x050000, n_pal
     .long 0x07a000, n_shr
+
+/* high score replay data (big, so last: keeps branches in range) */
+    .even
+    .include "hsdata.inc"
+    .even

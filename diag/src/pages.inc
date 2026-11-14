@@ -2931,50 +2931,84 @@ s_sk_h2:   .asciz "B2 EXIT"
 
 /* ---------------------------- high score replay -------------------------
  * Plays back the game's attract-mode high score scroll, exactly as captured
- * from the game in MAME: the text RAM and text colours it starts from, then
- * frame by frame the scroll writes (at the start of VBLANK) and every text
- * RAM write, spaced out like the game's (the 537-character burst runs
- * through the top half of the picture). Loops forever, so a glitch that only
- * shows during the high score scroll can be watched while probing.
+ * from the game in MAME. First the game's whole video state from the frame
+ * before the scroll: all colours, text / FG / BG RAM, sprite RAM (264 sprites
+ * on, all off screen), the scroll registers. Then frame by frame every video
+ * write the game makes: in VBLANK the three layers' scroll registers and a
+ * few BG colours, in the picture its text RAM writes, spaced out like the
+ * game's. Loops forever, so a glitch that only shows during the high score
+ * scroll can be watched while probing. Left out: the latch writes for the
+ * VBLANK IRQ and the DSP kick.
  * B1 pauses on the current scroll position, left / right then step it by
- * 2 pixels, B1 again carries on; B2 exits. Reuses the soak test's RAM.
- * Like the game, it clears the sprites every frame. */
+ * 2 pixels, B1 again carries on; B2 exits. Reuses the soak test's RAM. */
     .equ HS_PSE,    0x033f58               /* nonzero: paused */
-    .equ HS_SX,     0x033f5a               /* current x scroll */
+    .equ HS_SX,     0x033f5a               /* current text x scroll */
 pg_hsrep:
     bsr     page_init
-    lea     LATCH,%a0                   /* palette writes: screen off */
+/* the bulk of the state with the screen off: palette RAM only takes writes
+ * then (or in VBLANK), and the layers don't flash half-loaded */
+    lea     LATCH,%a0
     move.b  #L_SCRNOFF,(%a0)
     lea     hs_pal,%a1
-    lea     PAL_TXT0,%a2
-    move.w  #256-1,%d0
+    lea     PAL_BASE,%a2
+    move.w  #1792-1,%d0
 phr_p:
     move.w  (%a1)+,(%a2)+
     dbra    %d0,phr_p
+    bsr     phr_txload
+    lea     hs_fg,%a1
+    lea     FGOFFS,%a2
+    lea     FGDATA,%a6
+    bsr     phr_ld4k
+    lea     hs_bg,%a1
+    lea     BGOFFS,%a2
+    lea     BGDATA,%a6
+    bsr     phr_ld4k
+    move.w  #0x01c9,%d0                 /* scroll registers as the game had them */
+    move.w  %d0,HS_SX
+    move.w  %d0,TXSCROLL
+    move.w  #0x00e2,TXSCROLL+2
+    move.w  %d0,0x072000
+    move.w  #0x002a,0x072002
+    move.w  %d0,0x074000
+    move.w  #0x002a,0x074002
     move.b  #L_SCRNON,(%a0)
+/* sprite RAM: short bursts right after VBLANK ends, as the game does */
+    lea     hs_spr,%a1
+    lea     SPR_BASE,%a2
+    moveq   #SPR_NCHUNK-1,%d4
+phr_s1:
+    bsr     wait_frame
+    move.w  #SPR_CHUNK-1,%d0
+phr_s2:
+    move.w  (%a1)+,(%a2)+
+    dbra    %d0,phr_s2
+    dbra    %d4,phr_s1
     clr.w   HS_PSE
 phr_rst:
     bsr     sk_vbstart
-    lea     hs_tx,%a1                   /* the text RAM the scroll starts from */
-    moveq   #0,%d0
-phr_t:
-    move.w  %d0,(%a3)
-    move.w  (%a1)+,(%a4)
-    addq.w  #1,%d0
-    cmp.w   #2048,%d0
-    jne     phr_t
+    bsr     phr_txload                  /* text back to how the scroll starts */
     lea     hs_frames,%a5
     move.w  #HS_NF,%d6                  /* frames left */
 phr_fr:
     bsr     sk_vbstart
-    bsr     phr_spr
     tst.w   HS_PSE
     jne     phr_ps
-    move.w  (%a5)+,%d0
-    move.w  %d0,HS_SX
-    move.w  %d0,TXSCROLL
-    move.w  (%a5)+,TXSCROLL+2
-    move.w  (%a5)+,%d5                  /* text writes this frame */
+    move.w  (%a5)+,%d4                  /* writes in VBLANK */
+    move.w  (%a5)+,%d5                  /* writes in the picture */
+    subq.w  #1,%d4
+    jmi     phr_v3
+phr_v1:
+    addq.l  #2,%a5                      /* (no delay) */
+    movea.l (%a5)+,%a1
+    move.w  (%a5),(%a1)
+    cmpa.l  #TXSCROLL,%a1
+    jne     phr_v2
+    move.w  (%a5),HS_SX
+phr_v2:
+    addq.l  #2,%a5
+    dbra    %d4,phr_v1
+phr_v3:
     bsr     sk_vbend
     subq.w  #1,%d5
     jmi     phr_nw
@@ -2984,8 +3018,8 @@ phr_w:
 phr_dl:
     dbra    %d0,phr_dl
 phr_w2:
-    move.w  (%a5)+,(%a3)
-    move.w  (%a5)+,(%a4)
+    movea.l (%a5)+,%a1
+    move.w  (%a5)+,(%a1)
     dbra    %d5,phr_w
 phr_nw:
     bsr     phr_inp
@@ -2995,7 +3029,6 @@ phr_nw:
     moveq   #59,%d6
 phr_h:
     bsr     sk_vbstart
-    bsr     phr_spr
     move.w  HS_SX,TXSCROLL
     bsr     sk_vbend
     bsr     phr_inp
@@ -3003,24 +3036,33 @@ phr_h:
     jne     phr_h
     dbra    %d6,phr_h
     jra     phr_rst
-/* paused: keep writing the held scroll position, nothing else */
+/* paused: keep writing the held text scroll position, nothing else */
 phr_ps:
     move.w  HS_SX,TXSCROLL
     bsr     sk_vbend
     bsr     phr_inp
     jra     phr_fr
 
-/* every sprite off again, each VBLANK, as the game rewrites its sprite list
- * every frame. Clears the attribute word (priority 0 = hidden) of all 512
- * sprites. */
-phr_spr:
-    lea     SPR_BASE+2,%a1
-    move.w  #512-1,%d0
-    moveq   #0,%d1
-phs_1:
-    move.w  %d1,(%a1)
-    addq.l  #8,%a1
-    dbra    %d0,phs_1
+/* text RAM from hs_tx (A3/A4 = TXOFFS/TXDATA). Uses D0, A1. */
+phr_txload:
+    lea     hs_tx,%a1
+    moveq   #0,%d0
+phr_t:
+    move.w  %d0,(%a3)
+    move.w  (%a1)+,(%a4)
+    addq.w  #1,%d0
+    cmp.w   #2048,%d0
+    jne     phr_t
+    rts
+/* 4096 words from A1 through offset register A2 / data port A6. Uses D0. */
+phr_ld4k:
+    moveq   #0,%d0
+phr_l4:
+    move.w  %d0,(%a2)
+    move.w  (%a1)+,(%a6)
+    addq.w  #1,%d0
+    cmp.w   #4096,%d0
+    jne     phr_l4
     rts
 
 /* buttons; B2 leaves the page (drops this call's return address) */
@@ -3052,8 +3094,7 @@ phi_4:
 phi_x:
     rts
 
-    .include "hsdata.inc"
-    .even
+/* (hs_* data: hsdata.inc, included at the end of diag.s - it is big) */
 
 /* ------------------------------ jump table ----------------------------- */
     .include "gamepal.inc"
