@@ -1415,6 +1415,8 @@ dr_ok:
  * it is meant to be off is counted once, then the stacked SR is raised to
  * mask everything, so a stuck line cannot lock the test up. */
 irq_vbl:
+    cmpi.l  #HG_MAGIC,HG_ON             /* the game's own code is running */
+    jeq     hg_irq
     addq.w  #1,IRQC4
     move.b  #L_IRQOFF,LATCH             /* 04: acknowledge (resets C1) */
     tst.w   IRQON
@@ -1594,7 +1596,7 @@ loop_tab:
     .long 0x050000, n_pal
     .long 0x07a000, n_shr
 
-/* high score replay data (big, so last: keeps branches in range) */
+/* high score loop data (big, so last: keeps branches in range) */
     .even
-    .include "hsdata.inc"
+    .include "hsgame.inc"
     .even

@@ -2929,172 +2929,203 @@ s_sk_h1:   .asciz "B1 SCROLL ON OFF  UP CLEAR"
 s_sk_h2:   .asciz "B2 EXIT"
     .even
 
-/* ---------------------------- high score replay -------------------------
- * Plays back the game's attract-mode high score scroll, exactly as captured
- * from the game in MAME. First the game's whole video state from the frame
- * before the scroll: all colours, text / FG / BG RAM, sprite RAM (264 sprites
- * on, all off screen), the scroll registers. Then frame by frame every video
- * write the game makes: in VBLANK the three layers' scroll registers and a
- * few BG colours, in the picture its text RAM writes, spaced out like the
- * game's. Loops forever, so a glitch that only shows during the high score
- * scroll can be watched while probing. Left out: the latch writes for the
- * VBLANK IRQ and the DSP kick.
- * B1 pauses on the current scroll position, left / right then step it by
- * 2 pixels, B1 again carries on; B2 exits. Reuses the soak test's RAM. */
-    .equ HS_PSE,    0x033f58               /* nonzero: paused */
-    .equ HS_SX,     0x033f5a               /* current text x scroll */
-pg_hsrep:
+/* ------------------- high score loop: the game's own code -----------------
+ * Runs the game's attract-mode high score table, over and over, with the
+ * game's own code: its VBLANK routine, task scheduler and high score code
+ * all sit in program ROMs 8J / 8H ($20000-$2FFFF), which stay on the board
+ * when the diag is in 7J / 7H. (Checked in MAME: with $00000-$1FFFF replaced
+ * by the diag, the high score runs exactly as in the game.)
+ * The page loads the game's state captured in MAME at the moment it enters
+ * its frame wait ($23E90) at the start of the high score: work RAM
+ * $30000-$31FFF, all colours, text / FG / BG / sprite RAM, the latch, the
+ * CPU registers. Then it hands the CPU to the game. The diag's VBLANK
+ * interrupt passes each frame on to the game's ($20000), and does three
+ * things of its own: when the game moves on to its demo (attract state 3)
+ * it loads the state again, so the table scrolls in again; B1 pauses (the
+ * game's code then waits; left / right step the text scroll 2 pixels);
+ * B2 goes back to the menu.
+ * 8J / 8H must be set twincobr's: checked first with the game's own ROM
+ * check (sum table at $2FFE8). The DSP and sound CPU stay as the diag left
+ * them (held); the high score doesn't use them. */
+    .equ HG_ON,     0x033f58               /* 'HGON' while the game's code runs */
+    .equ HG_PSE,    0x033f5c               /* nonzero: paused */
+    .equ HG_PREV,   0x033f5e               /* P1 inputs at the last VBLANK */
+    .equ HG_MAGIC,  0x48474f4e
+pg_hsgame:
     bsr     page_init
-/* the bulk of the state with the screen off: palette RAM only takes writes
- * then (or in VBLANK), and the layers don't flash half-loaded */
-    lea     LATCH,%a0
-    move.b  #L_SCRNOFF,(%a0)
-    lea     hs_pal,%a1
-    lea     PAL_BASE,%a2
-    move.w  #1792-1,%d0
-phr_p:
-    move.w  (%a1)+,(%a2)+
-    dbra    %d0,phr_p
-    bsr     phr_txload
-    lea     hs_fg,%a1
-    lea     FGOFFS,%a2
-    lea     FGDATA,%a6
-    bsr     phr_ld4k
-    lea     hs_bg,%a1
-    lea     BGOFFS,%a2
-    lea     BGDATA,%a6
-    bsr     phr_ld4k
-    move.w  #0x01c9,%d0                 /* scroll registers as the game had them */
-    move.w  %d0,HS_SX
-    move.w  %d0,TXSCROLL
-    move.w  #0x00e2,TXSCROLL+2
-    move.w  %d0,0x072000
-    move.w  #0x002a,0x072002
-    move.w  %d0,0x074000
-    move.w  #0x002a,0x074002
-    move.b  #L_SCRNON,(%a0)
-/* sprite RAM: short bursts right after VBLANK ends, as the game does */
-    lea     hs_spr,%a1
-    lea     SPR_BASE,%a2
-    moveq   #SPR_NCHUNK-1,%d4
-phr_s1:
+    bsr     hg_romchk
+    jeq     hg_go
+    SAY     s_hg_t, 0, 0, A_YELLOW
+    SAY     s_hg_b1, 3, 0, A_WHITE
+    SAY     s_hg_b2, 4, 0, A_WHITE
+    SAY     s_hg_b3, 6, 0, A_GREY
+    SAY     s_sk_h2, 37, 0, A_GREY
+hg_bw:
     bsr     wait_frame
-    move.w  #SPR_CHUNK-1,%d0
-phr_s2:
-    move.w  (%a1)+,(%a2)+
-    dbra    %d0,phr_s2
-    dbra    %d4,phr_s1
-    clr.w   HS_PSE
-phr_rst:
-    bsr     sk_vbstart
-    bsr     phr_txload                  /* text back to how the scroll starts */
-    lea     hs_frames,%a5
-    move.w  #HS_NF,%d6                  /* frames left */
-phr_fr:
-    bsr     sk_vbstart
-    tst.w   HS_PSE
-    jne     phr_ps
-    move.w  (%a5)+,%d4                  /* writes in VBLANK */
-    move.w  (%a5)+,%d5                  /* writes in the picture */
-    subq.w  #1,%d4
-    jmi     phr_v3
-phr_v1:
-    addq.l  #2,%a5                      /* (no delay) */
-    movea.l (%a5)+,%a1
-    move.w  (%a5),(%a1)
-    cmpa.l  #TXSCROLL,%a1
-    jne     phr_v2
-    move.w  (%a5),HS_SX
-phr_v2:
-    addq.l  #2,%a5
-    dbra    %d4,phr_v1
-phr_v3:
-    bsr     sk_vbend
-    subq.w  #1,%d5
-    jmi     phr_nw
-phr_w:
-    move.w  (%a5)+,%d0                  /* delay before this write */
-    jmi     phr_w2
-phr_dl:
-    dbra    %d0,phr_dl
-phr_w2:
-    movea.l (%a5)+,%a1
-    move.w  (%a5)+,(%a1)
-    dbra    %d5,phr_w
-phr_nw:
-    bsr     phr_inp
-    subq.w  #1,%d6
-    jne     phr_fr
-/* the end: hold the last position a second, like the game, then again */
-    moveq   #59,%d6
-phr_h:
-    bsr     sk_vbstart
-    move.w  HS_SX,TXSCROLL
-    bsr     sk_vbend
-    bsr     phr_inp
-    tst.w   HS_PSE
-    jne     phr_h
-    dbra    %d6,phr_h
-    jra     phr_rst
-/* paused: keep writing the held text scroll position, nothing else */
-phr_ps:
-    move.w  HS_SX,TXSCROLL
-    bsr     sk_vbend
-    bsr     phr_inp
-    jra     phr_fr
-
-/* text RAM from hs_tx (A3/A4 = TXOFFS/TXDATA). Uses D0, A1. */
-phr_txload:
-    lea     hs_tx,%a1
-    moveq   #0,%d0
-phr_t:
-    move.w  %d0,(%a3)
-    move.w  (%a1)+,(%a4)
-    addq.w  #1,%d0
-    cmp.w   #2048,%d0
-    jne     phr_t
-    rts
-/* 4096 words from A1 through offset register A2 / data port A6. Uses D0. */
-phr_ld4k:
-    moveq   #0,%d0
-phr_l4:
-    move.w  %d0,(%a2)
-    move.w  (%a1)+,(%a6)
-    addq.w  #1,%d0
-    cmp.w   #4096,%d0
-    jne     phr_l4
-    rts
-
-/* buttons; B2 leaves the page (drops this call's return address) */
-phr_inp:
     bsr     read_inp
     move.w  IN_EDGE,%d0
     btst    #5,%d0
-    jeq     phi_1
-    addq.l  #4,%sp
+    jeq     hg_bw
     rts
-phi_1:
-    btst    #4,%d0
-    jeq     phi_2
-    eori.w  #1,HS_PSE
-phi_2:
-    tst.w   HS_PSE
-    jeq     phi_x
-    move.w  HS_SX,%d1
-    btst    #2,%d0
-    jeq     phi_3
-    subq.w  #2,%d1
-phi_3:
-    btst    #3,%d0
-    jeq     phi_4
-    addq.w  #2,%d1
-phi_4:
-    and.w   #0x01ff,%d1
-    move.w  %d1,HS_SX
-phi_x:
+hg_go:
+    clr.w   HG_PSE
+/* (also the restart, entered from the VBLANK interrupt) */
+hg_start:
+    move.w  #0x2700,%sr
+    movea.l #MM_SP,%sp
+    clr.l   HG_ON
+    lea     LATCH,%a0
+    move.b  #L_IRQOFF,(%a0)
+    move.b  #L_SCRNOFF,(%a0)            /* palette RAM takes writes only now */
+    lea     hg_pal,%a1
+    lea     PAL_BASE,%a2
+    move.w  #1792-1,%d0
+hg_p:
+    move.w  (%a1)+,(%a2)+
+    dbra    %d0,hg_p
+    lea     hg_tx,%a1
+    lea     TXOFFS,%a2
+    lea     TXDATA,%a6
+    move.w  #2048,%d1
+    bsr     hg_ld
+    lea     hg_fg,%a1
+    lea     FGOFFS,%a2
+    lea     FGDATA,%a6
+    move.w  #4096,%d1
+    bsr     hg_ld
+    lea     hg_bg,%a1
+    lea     BGOFFS,%a2
+    lea     BGDATA,%a6
+    move.w  #4096,%d1
+    move.b  #0x08,(%a0)                 /* BG bank 0 */
+    bsr     hg_ld
+    move.b  #0x09,(%a0)                 /* BG bank 1 */
+    bsr     hg_ld
+    move.b  #(0x08 + HG_Q4),(%a0)       /* latch as the game had it */
+    move.b  #(0x0a + HG_Q5),(%a0)
+    move.b  #(0x06 + HG_Q3),(%a0)
+    move.w  #HG_EX0,0x076000
+    move.w  #HG_EX1,0x076002
+    move.w  hg_ram+0x1736,TXSCROLL      /* scroll registers from the game's */
+    move.w  hg_ram+0x1738,TXSCROLL+2    /* copies ($31736-$31741); its VBLANK */
+    move.w  hg_ram+0x173a,0x074000      /* routine writes them every frame */
+    move.w  hg_ram+0x173c,0x074002
+    move.w  hg_ram+0x173e,0x072000
+    move.w  hg_ram+0x1740,0x072002
+    move.b  #L_SCRNON,(%a0)
+    lea     hg_spr,%a1                  /* sprite RAM: bursts after VBLANK */
+    lea     SPR_BASE,%a2
+    moveq   #SPR_NCHUNK-1,%d4
+hg_s1:
+    bsr     wait_frame
+    move.w  #SPR_CHUNK-1,%d0
+hg_s2:
+    move.w  (%a1)+,(%a2)+
+    dbra    %d0,hg_s2
+    dbra    %d4,hg_s1
+    lea     hg_ram,%a1                  /* the game's work RAM */
+    lea     0x030000,%a2
+    move.w  #4096-1,%d0
+hg_r:
+    move.w  (%a1)+,(%a2)+
+    dbra    %d0,hg_r
+    move.w  P1IN,HG_PREV
+    move.l  #HG_MAGIC,HG_ON
+    move.b  #L_HB1,(%a0)                /* Q2 = 1: VBLANK interrupt on */
+/* the CPU as the game had it, back into its frame wait */
+    movea.l #(HG_SP - 6),%sp
+    move.w  #HG_SR,(%sp)
+    move.l  #HG_PC,2(%sp)
+    movem.l hg_regs,%d0-%d7/%a0-%a6
+    rte
+
+/* D1 words from A1 through offset register A2 / data port A6. Uses D0. */
+hg_ld:
+    moveq   #0,%d0
+hg_l1:
+    move.w  %d0,(%a2)
+    move.w  (%a1)+,(%a6)
+    addq.w  #1,%d0
+    cmp.w   %d1,%d0
+    jne     hg_l1
     rts
 
-/* (hs_* data: hsdata.inc, included at the end of diag.s - it is big) */
+/* Z set if 8J / 8H are set twincobr's: the game's own check (per byte lane,
+ * movep.l sums over $20000-$2FFE7 plus the table entry make 0) and the
+ * table entries as expected. Uses D1-D3, A1. */
+hg_romchk:
+    cmpi.l  #HG_SUM1,0x02ffec
+    jne     hgr_x
+    cmpi.l  #HG_SUM3,0x02fff4
+    jne     hgr_x
+    lea     0x020000,%a1
+    bsr     hgr_sum
+    add.l   0x02ffec,%d2
+    jne     hgr_x
+    lea     0x020001,%a1
+    bsr     hgr_sum
+    add.l   0x02fff4,%d2
+hgr_x:
+    rts
+hgr_sum:
+    move.w  #(0xffe8 / 8) - 1,%d1
+    moveq   #0,%d2
+hgr_1:
+    movep.l 0(%a1),%d3
+    add.l   %d3,%d2
+    addq.l  #8,%a1
+    dbra    %d1,hgr_1
+    rts
+
+/* VBLANK interrupt while the game's code runs (irq_vbl comes here). Leaves
+ * the registers as it found them before passing on to the game's routine. */
+hg_irq:
+    movem.l %d0-%d1,-(%sp)
+    move.w  P1IN,%d0
+    move.w  HG_PREV,%d1
+    move.w  %d0,HG_PREV
+    not.w   %d1
+    and.w   %d0,%d1                     /* newly pressed */
+    btst    #5,%d1                      /* B2: back to the menu */
+    jeq     hgi_1
+    clr.l   HG_ON
+    move.b  #L_IRQOFF,LATCH
+    jmp     main_menu
+hgi_1:
+    btst    #4,%d1                      /* B1: pause / carry on */
+    jeq     hgi_2
+    eori.w  #1,HG_PSE
+hgi_2:
+    tst.w   HG_PSE
+    jeq     hgi_run
+/* paused: the game's code keeps waiting for its frame; left / right step
+ * the text scroll through the game's own copy of it */
+    btst    #2,%d1
+    jeq     hgi_3
+    subq.w  #2,0x031736
+hgi_3:
+    btst    #3,%d1
+    jeq     hgi_4
+    addq.w  #2,0x031736
+hgi_4:
+    andi.w  #0x01ff,0x031736
+    move.w  0x031736,TXSCROLL
+    movem.l (%sp)+,%d0-%d1
+    move.b  #L_IRQOFF,LATCH             /* acknowledge, arm the next one */
+    move.b  #L_HB1,LATCH
+    rte
+hgi_run:
+    movem.l (%sp)+,%d0-%d1
+    cmpi.w  #3,0x031836                 /* off to its demo: start over */
+    jeq     hg_start
+    jmp     0x020000                    /* the game's own VBLANK routine */
+
+s_hg_t:    .asciz "HIGH SCORE LOOP"
+s_hg_b1:   .asciz "NEEDS THE GAME ROMS 8J 8H"
+s_hg_b2:   .asciz "OF SET TWINCOBR ON THE BOARD"
+s_hg_b3:   .asciz "THEIR ROM CHECK DOES NOT MATCH"
+    .even
+
 
 /* ------------------------------ jump table ----------------------------- */
     .include "gamepal.inc"
@@ -3103,7 +3134,7 @@ phi_x:
 mm_jt:
     .long   pg_rerun, pg_loopmenu, pg_inputs, pg_colour, pg_txview
     .long   pg_fgview, pg_bgview, pg_sprview, pg_sprtest, pg_layers, pg_scroll, pg_sound, pg_dsp
-    .long   pg_soak, pg_hsrep
+    .long   pg_soak, pg_hsgame
 mm_str:
     .long   s_m_rerun, s_m_loop, s_m_in, s_m_col, s_m_tx
     .long   s_m_fg, s_m_bg, s_m_spr, s_m_spt, s_m_lay, s_m_scr, s_m_snd, s_m_dsp
@@ -3146,7 +3177,7 @@ s_m_scr:   .asciz "SCROLL TEST"
 s_m_snd:   .asciz "SOUND TEST"
 s_m_dsp:   .asciz "DSP TEST"
 s_m_soak:  .asciz "VRAM SOAK TEST"
-s_m_hsr:   .asciz "HIGH SCORE REPLAY"
+s_m_hsr:   .asciz "HIGH SCORE LOOP"
 s_exit:    .asciz "B2 EXIT"
 s_in_t:    .asciz "INPUT AND DIP TEST"
 s_in_p1:   .asciz "P1"

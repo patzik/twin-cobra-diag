@@ -68,7 +68,7 @@ the text report replaced that.
 - **Main menu** — input/DIP test, colour test, text/FG/BG tile viewers, sprite viewer,
   sprite test (flip, priority, full screen), layer test (order, BG/FG banks, flip screen),
   VRAM soak test (nonstop video RAM writes during the picture, error counts),
-  high score replay (the game's high score scroll, looped),
+  high score loop (the game's own high score code, looped),
   scroll test for all three layers, sound test, DSP test, RAM loop test, rerun. Verified in MAME (`doc/menu_pages.png`, `doc/menu_viewers.png`).
 
 - **Stage 7** — DSP (TMS320C10): the game's own self-test. Verified in MAME (pass, a bad
@@ -289,7 +289,7 @@ needs the stack.
 | SOUND TEST | Submenu: sound codes, YM3812 timer, coin counters and lockouts |
 | DSP TEST | Runs the DSP self-test again (stage 7); B1 repeats it |
 | VRAM SOAK TEST | Writes text, FG and BG video RAM nonstop while the picture is drawn, counts every bad write and every stray sprite RAM write |
-| HIGH SCORE REPLAY | Plays the game's attract-mode high score scroll in a loop, with the game's own text RAM writes and timing; pause and step the scroll |
+| HIGH SCORE LOOP | Runs the game's own high score code (from 8J / 8H) in a loop; pause and step the scroll |
 
 ![menu pages](doc/menu_pages.png)
 ![viewers](doc/menu_viewers.png)
@@ -427,8 +427,7 @@ Left to right (MAME): scrolling, stopped, and with write faults injected (one te
 400 with bit 9 flipped, one FG write in 400 with bit 2 flipped): counts and a visible bad
 character.
 
-**High score loop: the game itself, patched.** The surest way to watch the high score
-scroll over and over is the game's own code. `tools/mkhsloop.py` patches the game's program
+**High score loop, as patched game ROMs.** The same loop without the diag: `tools/mkhsloop.py` patches the game's program
 ROMs 8J and 8H (MAME set `twincobr`: `b30_26_ii.8j`, `b30_27_ii.8h`) in two places:
 
 | Address | Original | Patched | Effect |
@@ -446,33 +445,31 @@ checks the table scrolls in about every 5 seconds, forever: 160 frames of scroll
 refuses ROMs that aren't this version (it checks the bytes it replaces). Game data: keep it
 in a private repo.
 
-**High score replay.** (On real boards this page has shown garbage the game doesn't, even on
-a good board - use the patched game above to chase the high score glitch.) A glitch that only
-shows during the game's high score scroll is slow to chase with the game ROMs: it lasts about three seconds per attract cycle. This page plays
-that scroll back in a loop, exactly as the game does it, captured from the game in MAME:
+**High score loop.** Runs the game's attract-mode high score table over and over **with the
+game's own code**, for chasing a glitch that only shows during the high score scroll (it
+lasts a few seconds per attract cycle with the game ROMs). The game's VBLANK routine, task
+scheduler and high score code all sit in program ROMs 8J / 8H (`$20000`-`$2FFFF`), which
+stay on the board while the diag is in 7J / 7H. In MAME, the high score runs exactly as in the
+game with `$00000`-`$1FFFF` replaced by the diag.
 
-- First the game's whole video state from the frame before the scroll starts: all 1792
-  colours, text, FG and BG RAM (FG and BG are filled with the dark blue background tile),
-  sprite RAM (264 sprites switched on, all placed off screen), and the scroll registers.
-  Colours and layers load with the screen off (palette RAM only takes writes then, or in
-  VBLANK), sprite RAM in short bursts right after VBLANK, as the game does.
-- Then, frame by frame, every video write the game makes. In VBLANK: the scroll registers
-  of all three layers (text x from `$089` up to `$1C9` in steps of 2) and a few BG colours.
-  In the picture: its text RAM writes, in only three frames (37 characters as the scroll
-  starts, a burst of 536 through the top half of the picture, 96 more later), spaced out
-  with the game's timing.
-- Left out: the latch writes for the VBLANK interrupt and the per-frame DSP kick.
-- At `$1C9` it holds for a second, then starts again.
+- The page loads the game's state, captured in MAME at the moment it enters its frame wait
+  (`$23E90`) at the start of the high score: work RAM `$30000`-`$31FFF`, all colours, text,
+  FG, BG and sprite RAM, the latch, the CPU registers. Then it hands the CPU to the game.
+- The diag's VBLANK interrupt passes each frame on to the game's routine (`$20000`). When
+  the game moves on to its demo (attract state 3) the page loads the state again, so the
+  table scrolls in again: about every 5 seconds, with one blank frame between.
+- B1 pauses (the game's code waits for its next frame); left / right then step the text
+  scroll 2 pixels at a time; B1 carries on. B2 goes back to the menu.
+- 8J / 8H must be set `twincobr`'s: the page first runs the game's own ROM check on them
+  (sum table at `$2FFE8`) and says so if they don't match.
+- The DSP and sound CPU stay held, as the diag keeps them; the high score doesn't use them.
 
-B1 pauses on the current scroll position. Left / right then step the text layer 2 pixels at
-a time, so a position where the glitch shows can be held still for a scope or freeze spray;
-B1 again carries on. B2 exits. On a good board it must look exactly like the game's high
-score scroll. The captured data is in `src/hsdata.inc` (included at the end of `diag.s`),
-made by `tools/mkhs.py` (game data).
+The captured state is in `src/hsgame.inc` (included at the end of `diag.s`), made by
+`tools/mkhsgame.py` (game data).
 
-![High score replay](doc/hs_replay.png)
+![High score loop](doc/hs_loop.png)
 
-Four moments of the replay (MAME), the same as the game's high score scroll.
+The high score loop in MAME: scrolling in, held, and in again.
 
 **Scroll test.** Modelled on the Shinobi test ROM's scroll test. It checks one scroll
 register at a time, so a bad bit can be pinned down.
