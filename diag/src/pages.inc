@@ -2563,6 +2563,9 @@ pdp_exit:
 
 pg_soak:
     bsr     page_init
+/* palette RAM only takes writes with the screen off (as in the game) */
+    lea     LATCH,%a0
+    move.b  #L_SCRNOFF,(%a0)
 /* FG and BG colours all black: their test data shows as nothing */
     lea     PAL_BG0,%a1
     move.w  #512-1,%d0
@@ -2578,6 +2581,7 @@ psk_c:
     move.w  #C_GREY,(%a1)+
     move.w  #0x018c,(%a2)+
     dbra    %d0,psk_c
+    move.b  #L_SCRNON,(%a0)
     moveq   #0,%d0
     move.w  %d0,SK_TBLK
     move.w  %d0,SK_TPAR
@@ -2939,12 +2943,15 @@ s_sk_h2:   .asciz "B2 EXIT"
     .equ HS_SX,     0x033f5a               /* current x scroll */
 pg_hsrep:
     bsr     page_init
+    lea     LATCH,%a0                   /* palette writes: screen off */
+    move.b  #L_SCRNOFF,(%a0)
     lea     hs_pal,%a1
     lea     PAL_TXT0,%a2
     move.w  #256-1,%d0
 phr_p:
     move.w  (%a1)+,(%a2)+
     dbra    %d0,phr_p
+    move.b  #L_SCRNON,(%a0)
     clr.w   HS_PSE
 phr_rst:
     bsr     sk_vbstart
@@ -3003,10 +3010,9 @@ phr_ps:
     bsr     phr_inp
     jra     phr_fr
 
-/* every sprite off again, each VBLANK: the game rewrites its whole sprite
- * list every frame, so a stray sprite RAM write (see the soak test) shows
- * for one frame at most. Without this it would stay on screen. Clears the
- * attribute word (priority 0 = hidden) of all 512 sprites. */
+/* every sprite off again, each VBLANK, as the game rewrites its sprite list
+ * every frame. Clears the attribute word (priority 0 = hidden) of all 512
+ * sprites. */
 phr_spr:
     lea     SPR_BASE+2,%a1
     move.w  #512-1,%d0

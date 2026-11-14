@@ -407,10 +407,9 @@ writes at all, so neither catches it. This page copies the game's pattern:
   colours set to black (they don't show).
 - **Sprite RAM** is watched too. Every sprite is off, so all of it must stay zero; the
   page reads 64 words of it each VBLANK (all of it every 32 frames) and counts any word
-  that isn't zero, then clears it. On this board the video RAM data bus also runs over the
-  ribbon to the top board, where the sprite RAM is, so a glitchy sprite RAM select or
-  write strobe there turns soak writes into stray sprite RAM writes: odd sprite fragments
-  in the sprite test colours appear behind the text, and `SP` counts them.
+  that isn't zero, then clears it. The video RAM data bus also runs over the ribbon to the
+  top board, where the sprite RAM is, so a glitchy sprite RAM select or write strobe there
+  would turn soak writes into stray sprite RAM writes; `SP` counts them.
 - The panel counts errors per layer (`TX FG BG SP`, yellow once non-zero) and shows the
   last one: layer, offset (for `SP` the word in sprite RAM, 4 words a sprite), the value
   written (`W`, always 0 for `SP`) and read back (`R`). XOR of W and R gives
@@ -440,10 +439,9 @@ writes to the text layer.
   starts, a burst of 536 that runs through the top half of the picture, and 96 more later.
   These writes are replayed in the same frames, spaced out with the game's timing.
 - At `$1C9` it holds for a second, then starts again.
-- Every VBLANK all sprites are switched off again. The game rewrites its whole sprite list
-  every frame, so a stray sprite RAM write (the soak test shows these on both boards) is
-  gone a frame later; without this the junk would build up on screen and look like a
-  fault the game doesn't have.
+- The text colours are loaded with the screen off: palette RAM only takes writes then
+  (the game does the same). Every VBLANK all sprites are switched off again, as the game
+  rewrites its sprite list every frame.
 
 B1 pauses on the current scroll position. Left / right then step it 2 pixels at a time, so a
 position where the glitch shows can be held still for a scope or freeze spray; B1 again
