@@ -427,8 +427,28 @@ Left to right (MAME): scrolling, stopped, and with write faults injected (one te
 400 with bit 9 flipped, one FG write in 400 with bit 2 flipped): counts and a visible bad
 character.
 
-**High score replay.** A glitch that only shows during the game's high score scroll is slow
-to chase with the game ROMs: it lasts about three seconds per attract cycle. This page plays
+**High score loop: the game itself, patched.** The surest way to watch the high score
+scroll over and over is the game's own code. `tools/mkhsloop.py` patches the game's program
+ROMs 8J and 8H (MAME set `twincobr`: `b30_26_ii.8j`, `b30_27_ii.8h`) in two places:
+
+| Address | Original | Patched | Effect |
+|---|---|---|---|
+| `$20E5A` | `addq.w #1,(a1)` | `addq.w #2,(a1)` | after power on the attract mode goes straight to the high score table (state 2) instead of the title (state 1) |
+| `$2102C` | `move.w #64,$314A2` / `move.w #3,$31836` | `bclr #3,$314A1` / `move.w #2,$31836` | at the end of the high score table it starts state 2 again (its set-up flag cleared) instead of going on to state 3 |
+
+The game checks its ROMs at power on: a table at `$2FFE8` holds one sum per byte lane and
+half, and the two for `$20000`-`$2FFE7` are recomputed, so it still shows `ROM CHECK OK`.
+Ready-made images are in `build/`: `hsloop_b30_26_ii.8j.bin` (CRC `265d6e03`) and
+`hsloop_b30_27_ii.8h.bin` (CRC `74773442`), 32 KB each (27256). Burn them in place of 8J and
+8H, with the game's own 7J / 7H (`b30_01.7j`, `b30_03.7h`) back in. After the power-on
+checks the table scrolls in about every 5 seconds, forever: 160 frames of scrolling, then
+129 frames held (with the game's background colour pulse). Verified in MAME. The script
+refuses ROMs that aren't this version (it checks the bytes it replaces). Game data: keep it
+in a private repo.
+
+**High score replay.** (On real boards this page has shown garbage the game doesn't, even on
+a good board - use the patched game above to chase the high score glitch.) A glitch that only
+shows during the game's high score scroll is slow to chase with the game ROMs: it lasts about three seconds per attract cycle. This page plays
 that scroll back in a loop, exactly as the game does it, captured from the game in MAME:
 
 - First the game's whole video state from the frame before the scroll starts: all 1792
